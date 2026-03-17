@@ -27,7 +27,11 @@ func (r *Router) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (r *Router) handleMe(w http.ResponseWriter, _ *http.Request) {
+func (r *Router) handleMe(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		writeMethodNotAllowed(w)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"user": r.store.Me()})
 }
 
