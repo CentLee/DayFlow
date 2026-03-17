@@ -6,7 +6,6 @@ tracker:
   active_states:
     - Todo
     - In Progress
-    - In Review
   terminal_states:
     - Done
     - Canceled
