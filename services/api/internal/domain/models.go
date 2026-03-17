@@ -10,6 +10,7 @@ type Calendar struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Color     string `json:"color"`
+	Role      string `json:"role,omitempty"`
 	UpdatedAt string `json:"updated_at"`
 }
 
