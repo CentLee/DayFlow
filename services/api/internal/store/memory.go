@@ -1,31 +1,185 @@
 package store
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/kakao-ent/dayflow/services/api/internal/domain"
 )
 
-type MemoryStore struct{}
+var (
+	ErrEmailTaken          = errors.New("email already registered")
+	ErrInvalidCredentials  = errors.New("invalid credentials")
+	ErrInvalidInvite       = errors.New("invalid invite")
+	ErrInviteEmailMismatch = errors.New("invite email mismatch")
+)
 
-func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{}
+type MemoryStore struct {
+	mu       sync.Mutex
+	users    map[string]storedUser
+	userIDs  map[string]string
+	sessions map[string]string
+	invites  map[string]invite
+	counter  int
+	monthKey string
+	ownerID  string
 }
 
-func (s *MemoryStore) Me() domain.User {
-	return domain.User{
+type storedUser struct {
+	User                  domain.User
+	PasswordHash          []byte
+	OwnedCalendars        []domain.Calendar
+	SharedCalendars       []domain.Calendar
+	CurrentBudgetMonthKey string
+}
+
+type invite struct {
+	Code            string
+	Email           string
+	SharedCalendars []domain.Calendar
+}
+
+func NewMemoryStore() *MemoryStore {
+	now := time.Now().UTC().Format(time.RFC3339)
+	monthKey := time.Now().UTC().Format("2006-01")
+	owner := domain.User{
 		ID:          "usr_001",
 		Email:       "owner@dayflow.local",
 		DisplayName: "DayFlow Owner",
 	}
+	personalCalendar := domain.Calendar{ID: "cal_001", Name: "Personal", Color: "#1F6B5C", UpdatedAt: now}
+	sharedCalendar := domain.Calendar{ID: "cal_002", Name: "Shared Home", Color: "#D8A21D", UpdatedAt: now}
+
+	store := &MemoryStore{
+		users:    make(map[string]storedUser),
+		userIDs:  make(map[string]string),
+		sessions: make(map[string]string),
+		invites:  make(map[string]invite),
+		counter:  1,
+		monthKey: monthKey,
+		ownerID:  owner.ID,
+	}
+
+	store.mustSeedUser(storedUser{
+		User:                  owner,
+		PasswordHash:          mustHashPassword("secret1234"),
+		OwnedCalendars:        []domain.Calendar{personalCalendar, sharedCalendar},
+		SharedCalendars:       []domain.Calendar{},
+		CurrentBudgetMonthKey: monthKey,
+	})
+
+	store.invites["invite_abc"] = invite{
+		Code:  "invite_abc",
+		Email: "user@example.com",
+		SharedCalendars: []domain.Calendar{
+			sharedCalendar,
+		},
+	}
+
+	return store
+}
+
+func (s *MemoryStore) mustSeedUser(user storedUser) {
+	s.users[normalizeEmail(user.User.Email)] = user
+	s.userIDs[user.User.ID] = normalizeEmail(user.User.Email)
+}
+
+func (s *MemoryStore) Register(email, displayName, password, inviteCode string) (domain.User, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	normalizedEmail := normalizeEmail(email)
+	inviteRecord, ok := s.invites[inviteCode]
+	if !ok {
+		return domain.User{}, "", ErrInvalidInvite
+	}
+	if normalizeEmail(inviteRecord.Email) != normalizedEmail {
+		return domain.User{}, "", ErrInviteEmailMismatch
+	}
+	if _, exists := s.users[normalizedEmail]; exists {
+		return domain.User{}, "", ErrEmailTaken
+	}
+
+	s.counter++
+	user := domain.User{
+		ID:          fmt.Sprintf("usr_%03d", s.counter),
+		Email:       normalizedEmail,
+		DisplayName: displayName,
+	}
+	stored := storedUser{
+		User:                  user,
+		PasswordHash:          mustHashPassword(password),
+		OwnedCalendars:        []domain.Calendar{},
+		SharedCalendars:       cloneCalendars(inviteRecord.SharedCalendars),
+		CurrentBudgetMonthKey: s.monthKey,
+	}
+	s.users[normalizedEmail] = stored
+	s.userIDs[user.ID] = normalizedEmail
+	delete(s.invites, inviteCode)
+
+	token := newToken()
+	s.sessions[token] = user.ID
+	return user, token, nil
+}
+
+func (s *MemoryStore) Login(email, password string) (domain.User, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stored, ok := s.users[normalizeEmail(email)]
+	if !ok {
+		return domain.User{}, "", ErrInvalidCredentials
+	}
+	if err := bcrypt.CompareHashAndPassword(stored.PasswordHash, []byte(password)); err != nil {
+		return domain.User{}, "", ErrInvalidCredentials
+	}
+
+	token := newToken()
+	s.sessions[token] = stored.User.ID
+	return stored.User, token, nil
+}
+
+func (s *MemoryStore) AuthenticatedMe(token string) (domain.Me, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	userID, ok := s.sessions[token]
+	if !ok {
+		return domain.Me{}, false
+	}
+	normalizedEmail, ok := s.userIDs[userID]
+	if !ok {
+		return domain.Me{}, false
+	}
+	stored, ok := s.users[normalizedEmail]
+	if !ok {
+		return domain.Me{}, false
+	}
+
+	return domain.Me{
+		User:                  stored.User,
+		OwnedCalendars:        cloneCalendars(stored.OwnedCalendars),
+		SharedCalendars:       cloneCalendars(stored.SharedCalendars),
+		CurrentBudgetMonthKey: stored.CurrentBudgetMonthKey,
+	}, true
 }
 
 func (s *MemoryStore) Calendars() []domain.Calendar {
-	now := time.Now().UTC().Format(time.RFC3339)
-	return []domain.Calendar{
-		{ID: "cal_001", Name: "Personal", Color: "#1F6B5C", UpdatedAt: now},
-		{ID: "cal_002", Name: "Shared Home", Color: "#D8A21D", UpdatedAt: now},
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	me, ok := s.userByID(s.ownerID)
+	if !ok {
+		return nil
 	}
+	return cloneCalendars(me.OwnedCalendars)
 }
 
 func (s *MemoryStore) Events(calendarID string) []domain.Event {
@@ -79,4 +233,42 @@ func (s *MemoryStore) BudgetBoard(monthKey string) domain.BudgetBoard {
 			{ID: "rem_002", Name: "전기 정산", Kind: "reminder", BillingDayLabel: "월말일", UpdatedAt: now},
 		},
 	}
+}
+
+func (s *MemoryStore) userByID(userID string) (storedUser, bool) {
+	normalizedEmail, ok := s.userIDs[userID]
+	if !ok {
+		return storedUser{}, false
+	}
+	stored, ok := s.users[normalizedEmail]
+	return stored, ok
+}
+
+func cloneCalendars(calendars []domain.Calendar) []domain.Calendar {
+	if len(calendars) == 0 {
+		return []domain.Calendar{}
+	}
+	cloned := make([]domain.Calendar, len(calendars))
+	copy(cloned, calendars)
+	return cloned
+}
+
+func mustHashPassword(password string) []byte {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		panic(err)
+	}
+	return hash
+}
+
+func newToken() string {
+	buf := make([]byte, 24)
+	if _, err := rand.Read(buf); err != nil {
+		panic(err)
+	}
+	return "tok_" + hex.EncodeToString(buf)
+}
+
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
 }
