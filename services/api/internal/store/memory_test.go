@@ -75,6 +75,33 @@ func TestMemoryStoreEventCRUDAndFiltering(t *testing.T) {
 		t.Fatalf("expected filtered result to contain created event %#v", filtered)
 	}
 
+	longEvent, err := repo.CreateEvent("usr_002", "cal_002", EventInput{
+		Title:    "Two Day Event",
+		Notes:    "overlap should count",
+		StartsAt: start,
+		EndsAt:   start.Add(48 * time.Hour),
+		AllDay:   false,
+	})
+	if err != nil {
+		t.Fatalf("create overlapping event: %v", err)
+	}
+
+	overlapFrom := start.Add(24 * time.Hour)
+	overlapTo := overlapFrom.Add(30 * time.Minute)
+	overlapping, err := repo.ListEvents("usr_003", "cal_002", &overlapFrom, &overlapTo)
+	if err != nil {
+		t.Fatalf("list overlapping events: %v", err)
+	}
+	overlapFound := false
+	for _, item := range overlapping {
+		if item.ID == longEvent.ID {
+			overlapFound = true
+		}
+	}
+	if !overlapFound {
+		t.Fatalf("expected overlap window to include long-running event %#v", overlapping)
+	}
+
 	allDay := true
 	updated, err := repo.UpdateEvent("usr_001", event.ID, EventPatch{AllDay: &allDay, Title: stringPtr("Updated Event")})
 	if err != nil {

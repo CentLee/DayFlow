@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kakao-ent/dayflow/services/api/internal/domain"
 	"github.com/kakao-ent/dayflow/services/api/internal/store"
 )
 
@@ -20,6 +21,8 @@ func NewRouter(store *store.MemoryStore) http.Handler {
 	r := &Router{store: store}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", r.handleHealth)
+	mux.HandleFunc("/v1/auth/register", r.handleRegister)
+	mux.HandleFunc("/v1/auth/login", r.handleLogin)
 	mux.HandleFunc("/v1/me", r.handleMe)
 	mux.HandleFunc("/v1/calendars", r.handleCalendars)
 	mux.HandleFunc("/v1/calendars/", r.handleCalendarSubroutes)
@@ -32,17 +35,85 @@ func (r *Router) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (r *Router) handleRegister(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		writeMethodNotAllowed(w)
+		return
+	}
+
+	var input struct {
+		Email       string `json:"email"`
+		DisplayName string `json:"display_name"`
+		Password    string `json:"password"`
+		InviteCode  string `json:"invite_code"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+		writeBadRequest(w, "invalid request body")
+		return
+	}
+	if input.Email == "" || input.DisplayName == "" || input.Password == "" || input.InviteCode == "" {
+		writeBadRequest(w, "email, display_name, password, and invite_code are required")
+		return
+	}
+
+	user, token, err := r.store.Register(input.Email, input.DisplayName, input.Password, input.InviteCode)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrInvalidInvite), errors.Is(err, store.ErrInviteEmailMismatch):
+			writeJSON(w, http.StatusForbidden, errorPayload("invalid_invite", err.Error()))
+		case errors.Is(err, store.ErrEmailTaken):
+			writeJSON(w, http.StatusConflict, errorPayload("email_taken", err.Error()))
+		default:
+			writeBadRequest(w, err.Error())
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{"user": user, "token": token})
+}
+
+func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		writeMethodNotAllowed(w)
+		return
+	}
+
+	var input struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+		writeBadRequest(w, "invalid request body")
+		return
+	}
+	if input.Email == "" || input.Password == "" {
+		writeBadRequest(w, "email and password are required")
+		return
+	}
+
+	user, token, err := r.store.Login(input.Email, input.Password)
+	if err != nil {
+		if errors.Is(err, store.ErrInvalidCredentials) {
+			writeUnauthorized(w, err.Error())
+			return
+		}
+		writeBadRequest(w, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"user": user, "token": token})
+}
+
 func (r *Router) handleMe(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodGet {
 		writeMethodNotAllowed(w)
 		return
 	}
-	userID, ok := r.currentUserID(w, req)
+	me, ok := r.currentMe(w, req)
 	if !ok {
 		return
 	}
-	user, _ := r.store.Me(userID)
-	writeJSON(w, http.StatusOK, map[string]any{"user": user})
+	writeJSON(w, http.StatusOK, me)
 }
 
 func (r *Router) handleCalendars(w http.ResponseWriter, req *http.Request) {
@@ -201,29 +272,46 @@ func (r *Router) handleBudgetMonth(w http.ResponseWriter, req *http.Request) {
 }
 
 func writeMethodNotAllowed(w http.ResponseWriter) {
-	writeJSON(w, http.StatusMethodNotAllowed, map[string]any{
+	writeJSON(w, http.StatusMethodNotAllowed, errorPayload("method_not_allowed", "method not allowed"))
+}
+
+func writeBadRequest(w http.ResponseWriter, message string) {
+	writeJSON(w, http.StatusBadRequest, errorPayload("bad_request", message))
+}
+
+func writeUnauthorized(w http.ResponseWriter, message string) {
+	writeJSON(w, http.StatusUnauthorized, errorPayload("unauthorized", message))
+}
+
+func errorPayload(code, message string) map[string]any {
+	return map[string]any{
 		"error": map[string]string{
-			"code":    "method_not_allowed",
-			"message": "method not allowed",
+			"code":    code,
+			"message": message,
 		},
-	})
+	}
+}
+
+func (r *Router) currentMe(w http.ResponseWriter, req *http.Request) (domain.Me, bool) {
+	token, ok := bearerToken(req)
+	if !ok {
+		writeUnauthorized(w, "authentication required")
+		return domain.Me{}, false
+	}
+	me, ok := r.store.AuthenticatedMe(token)
+	if !ok {
+		writeUnauthorized(w, "invalid session")
+		return domain.Me{}, false
+	}
+	return me, true
 }
 
 func (r *Router) currentUserID(w http.ResponseWriter, req *http.Request) (string, bool) {
-	userID := req.Header.Get("X-DayFlow-User-ID")
-	if userID == "" {
-		userID = "usr_001"
-	}
-	if _, ok := r.store.Me(userID); !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{
-			"error": map[string]string{
-				"code":    "unauthorized",
-				"message": "unknown user",
-			},
-		})
+	me, ok := r.currentMe(w, req)
+	if !ok {
 		return "", false
 	}
-	return userID, true
+	return me.User.ID, true
 }
 
 func decodeJSON(req *http.Request, dest any) error {
@@ -324,6 +412,18 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	default:
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]string{"code": "internal", "message": "internal server error"}})
 	}
+}
+
+func bearerToken(req *http.Request) (string, bool) {
+	authorization := strings.TrimSpace(req.Header.Get("Authorization"))
+	if authorization == "" {
+		return "", false
+	}
+	parts := strings.SplitN(authorization, " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || strings.TrimSpace(parts[1]) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(parts[1]), true
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

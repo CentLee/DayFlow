@@ -29,10 +29,13 @@ This repository uses a minimal local Symphony workflow modeled after the officia
 2. Configure Symphony to poll that project.
 3. Start `scripts/run_symphony.sh` instead of invoking Symphony directly.
 4. The wrapper keeps Linear issue states aligned with GitHub PR state.
-5. For each issue, Symphony creates an isolated workspace under the configured root.
-6. Symphony runs `codex app-server` in that workspace.
-7. The assigned agent follows `WORKFLOW.md`.
-8. Results are returned through branch, PR, CI status, and proof-of-work summary.
+5. The wrapper starts two Symphony lanes:
+   - implementation lane via `WORKFLOW.md`
+   - review lane via `WORKFLOW.review.md`
+6. For each issue, Symphony creates an isolated workspace under the configured root.
+7. Symphony runs `codex app-server` in that workspace.
+8. The assigned agent follows the lane-specific workflow.
+9. Results are returned through branch, PR, CI status, and proof-of-work summary.
 
 ## DayFlow State Machine
 
@@ -102,6 +105,7 @@ Automatic reconciliation rules:
 - draft PR keeps the issue in `In Progress`
 - ready-for-review PR moves the issue to `In Review`
 - merged PR moves the issue to `Done`
+- `In Review` issues are picked up by the review lane on port `4101`
 
 Future target filter after adding more Linear states:
 

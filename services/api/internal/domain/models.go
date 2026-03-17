@@ -6,6 +6,13 @@ type User struct {
 	DisplayName string `json:"display_name"`
 }
 
+type Me struct {
+	User                  User       `json:"user"`
+	OwnedCalendars        []Calendar `json:"owned_calendars"`
+	SharedCalendars       []Calendar `json:"shared_calendars"`
+	CurrentBudgetMonthKey string     `json:"current_budget_month_key"`
+}
+
 type Calendar struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
