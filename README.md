@@ -93,3 +93,11 @@ Additional operating docs:
 - `docs/iteration-queue.md`
 - `docs/review-checklist.md`
 - `docs/github-local-auth.md`
+
+### Recommended Run Command
+
+Use the wrapper below instead of launching Symphony directly. It keeps Linear states aligned with PR state.
+
+```bash
+LINEAR_API_KEY=... scripts/run_symphony.sh
+```

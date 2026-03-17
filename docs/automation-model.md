@@ -14,6 +14,7 @@ Automatic:
 - Codex execution
 - branch and PR creation
 - CI result collection
+- PR-to-Linear state reconciliation
 
 Manual:
 
@@ -130,6 +131,24 @@ All PRs must answer:
 - does this cross private budget data boundaries?
 - are tests missing for behavior changes?
 - does this add non-MVP complexity?
+
+## State Reconciliation Rules
+
+DayFlow now enforces these automatic state transitions:
+
+- no PR: issue stays in `Todo` or `In Progress`
+- open draft PR: issue stays in `In Progress`
+- open ready-for-review PR: issue moves to `In Review`
+- merged PR: issue moves to `Done`
+
+The reconciliation source of truth is the issue branch name:
+
+- `codex/CEN-9-...` maps to `CEN-9`
+
+Automation scripts:
+
+- `scripts/sync_linear_pr_states.sh`
+- `scripts/run_symphony.sh`
 
 ## Branch and Workspace Naming
 
