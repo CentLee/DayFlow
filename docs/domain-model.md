@@ -15,8 +15,33 @@
 - `email`
 - `display_name`
 - `password_hash`
+- `registered_by_invite_id` (optional)
 - `created_at`
 - `updated_at`
+
+### Invite
+
+- `id`
+- `calendar_id`
+- `email`
+- `role` (`editor`, `viewer`)
+- `invite_code`
+- `invited_by_user_id`
+- `accepted_by_user_id`
+- `accepted_at`
+- `expires_at`
+- `created_at`
+- `updated_at`
+
+### Session
+
+- `id`
+- `user_id`
+- `token_hash`
+- `last_used_at`
+- `expires_at`
+- `revoked_at`
+- `created_at`
 
 ### Calendar
 
@@ -124,4 +149,5 @@
 
 - `BudgetMonth`, `BudgetItemEntry`, `BudgetBucket`, `BillingReminder` are accessible only by the expense book owner
 - calendar membership never grants budget access
-
+- invite acceptance grants calendar access only after membership is created
+- sessions authenticate one user account and do not widen budget visibility
