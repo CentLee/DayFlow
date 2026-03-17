@@ -1,0 +1,12 @@
+.DS_Store
+.env
+.env.local
+dist/
+build/
+.build/
+DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+coverage.out
+.symphony/

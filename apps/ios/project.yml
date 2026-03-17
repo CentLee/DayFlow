@@ -1,0 +1,18 @@
+name: DayFlow
+options:
+  minimumXcodeGenVersion: 2.38.0
+targets:
+  DayFlow:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - DayFlow
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kakaoent.dayflow
+        SWIFT_VERSION: 6.0
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+
