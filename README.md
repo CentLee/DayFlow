@@ -16,8 +16,19 @@ DayFlow is a local-first monorepo for a shared calendar and personal-first month
 - `services/api`: Go API skeleton, domain model, migrations
 - `infra/docker`: local Postgres
 - `docs`: product, domain, API, iOS, sync, Symphony docs
-- `.codex/agents`: project agents
-- `.codex/skills`: project skills
+- `.codex/agents`: DayFlow-specific agent definitions
+- `.codex/skills`: DayFlow-specific adapter skills
+
+## Skill Layers
+
+DayFlow assumes two skill layers:
+
+- global harness skills live in the local machine's `~/.codex/skills`
+- project-specific rules live in this repository under `.codex/`
+
+The global harness layer owns reusable orchestration and agent design patterns.
+This repository only keeps the DayFlow-specific contracts, domain rules, and thin adapters needed
+for autonomous project execution.
 
 ## Product Direction
 

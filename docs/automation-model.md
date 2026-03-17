@@ -4,6 +4,9 @@
 
 DayFlow uses semi-automated delivery.
 
+The automation model assumes a global harness skill layer in `~/.codex/skills` plus a thin
+DayFlow-specific layer in this repository.
+
 Automatic:
 
 - Linear issue detection
@@ -142,6 +145,7 @@ Move an issue to `Blocked` when:
 
 - `WORKFLOW.md`
 - `docs/automation-model.md`
+- `docs/harness-skill-model.md`
 - `docs/iteration-queue.md`
 - `docs/review-checklist.md`
 - `.github/pull_request_template.md`

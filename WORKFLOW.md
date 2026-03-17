@@ -17,7 +17,7 @@ workspace:
   root: /Users/kakao_ent/Documents/DayFlow/.symphony/workspaces
 hooks:
   after_create: |
-    git clone --branch codex/bootstrap-symphony-automation --single-branch /Users/kakao_ent/Documents/DayFlow .
+    git clone --branch codex/bootstrap-symphony-automation --single-branch https://github.com/CentLee/DayFlow.git .
   before_remove: |
     rm -rf .git
 agent:
