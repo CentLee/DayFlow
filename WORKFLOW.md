@@ -18,6 +18,7 @@ workspace:
 hooks:
   after_create: |
     git clone --branch develop --single-branch https://github.com/CentLee/DayFlow.git .
+    git submodule update --init --recursive
   before_remove: |
     rm -rf .git
 agent:

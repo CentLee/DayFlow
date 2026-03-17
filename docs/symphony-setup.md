@@ -104,5 +104,7 @@ Future target filter after adding more Linear states:
 
 - local-first means Postgres runs locally, while app and API can be launched from the workspace
 - initial setup can use personal Linear and GitHub accounts
+- the vendored Symphony runtime is pinned through the forked submodule at `/Users/kakao_ent/Documents/DayFlow/vendor/symphony`
+- new workspaces must initialize submodules so the patched Symphony runtime is available
 - the vendored Symphony Elixir runtime under `/Users/kakao_ent/Documents/DayFlow/vendor/symphony/elixir` contains a local compatibility patch for the current `codex app-server` v2 schema
 - specifically, `thread/start` sandbox values are normalized to `readOnly`, `workspaceWrite`, `dangerFullAccess`, and the default `turn/start` sandbox policy uses `mode` plus snake_case keys expected by the local app-server schema
