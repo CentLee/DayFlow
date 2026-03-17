@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="/Users/kakao_ent/Documents/DayFlow"
 SYMPHONY_DIR="$ROOT_DIR/vendor/symphony/elixir"
-WORKFLOW_FILE="$ROOT_DIR/WORKFLOW.md"
+IMPLEMENTATION_WORKFLOW_FILE="$ROOT_DIR/WORKFLOW.md"
+REVIEW_WORKFLOW_FILE="$ROOT_DIR/WORKFLOW.review.md"
 SYNC_SCRIPT="$ROOT_DIR/scripts/sync_linear_pr_states.sh"
 SYNC_INTERVAL_SECONDS="${SYNC_INTERVAL_SECONDS:-20}"
 
@@ -25,8 +26,11 @@ cleanup() {
   if [[ -n "${SYNC_LOOP_PID:-}" ]]; then
     kill "$SYNC_LOOP_PID" >/dev/null 2>&1 || true
   fi
-  if [[ -n "${SYMPHONY_PID:-}" ]]; then
-    kill "$SYMPHONY_PID" >/dev/null 2>&1 || true
+  if [[ -n "${IMPLEMENTATION_SYMPHONY_PID:-}" ]]; then
+    kill "$IMPLEMENTATION_SYMPHONY_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${REVIEW_SYMPHONY_PID:-}" ]]; then
+    kill "$REVIEW_SYMPHONY_PID" >/dev/null 2>&1 || true
   fi
 }
 
@@ -37,7 +41,10 @@ sync_loop &
 SYNC_LOOP_PID=$!
 
 cd "$SYMPHONY_DIR"
-/opt/homebrew/bin/mise exec -- ./bin/symphony "$WORKFLOW_FILE" --i-understand-that-this-will-be-running-without-the-usual-guardrails &
-SYMPHONY_PID=$!
+/opt/homebrew/bin/mise exec -- ./bin/symphony "$IMPLEMENTATION_WORKFLOW_FILE" --i-understand-that-this-will-be-running-without-the-usual-guardrails &
+IMPLEMENTATION_SYMPHONY_PID=$!
 
-wait "$SYMPHONY_PID"
+/opt/homebrew/bin/mise exec -- ./bin/symphony "$REVIEW_WORKFLOW_FILE" --i-understand-that-this-will-be-running-without-the-usual-guardrails &
+REVIEW_SYMPHONY_PID=$!
+
+wait "$IMPLEMENTATION_SYMPHONY_PID" "$REVIEW_SYMPHONY_PID"

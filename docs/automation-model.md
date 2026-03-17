@@ -15,6 +15,7 @@ Automatic:
 - branch and PR creation
 - CI result collection
 - PR-to-Linear state reconciliation
+- review-lane execution for `In Review` issues
 
 Manual:
 
@@ -31,6 +32,11 @@ Manual:
 - creates issue workspaces
 - launches `codex app-server`
 - collects branch, PR, and CI output
+
+DayFlow runs Symphony in two lanes:
+
+- implementation lane: `Todo`, `In Progress`
+- review lane: `In Review`
 
 ### dayflow-orchestrator
 
@@ -140,6 +146,7 @@ DayFlow now enforces these automatic state transitions:
 - open draft PR: issue stays in `In Progress`
 - open ready-for-review PR: issue moves to `In Review`
 - merged PR: issue moves to `Done`
+- `In Review` issues are handled by the review lane, not the implementation lane
 
 The reconciliation source of truth is the issue branch name:
 
@@ -149,6 +156,7 @@ Automation scripts:
 
 - `scripts/sync_linear_pr_states.sh`
 - `scripts/run_symphony.sh`
+- `WORKFLOW.review.md`
 
 ## Branch and Workspace Naming
 
