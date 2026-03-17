@@ -73,16 +73,75 @@ Manual:
 - changes merged
 - follow-up issues created if needed
 
+## Linear Issue Template
+
+Use this exact body structure for every DayFlow Linear issue:
+
+```md
+## Goal
+
+- <one issue-sized outcome>
+
+## Primary Agent
+
+- <exactly one of: product-agent, backend-agent, ios-agent, integration-agent, review-agent>
+
+## Secondary Agents
+
+- <ordered helper agents or `none`>
+
+## Inputs
+
+- <specific repo file, doc, contract, PR, or artifact>
+
+## Constraints
+
+- <must-keep boundary or `none`>
+
+## Done When
+
+- <observable completion check>
+- <observable completion check>
+
+## Out of Scope
+
+- <explicit non-goal>
+
+## Test Notes
+
+- <how the result should be validated or `none`>
+
+## Follow-up Issues
+
+- <issue identifier or `none`>
+```
+
+Template rules:
+
+- keep the section headings exactly as written so Symphony can route consistently
+- use bullet lists under every section, even for a single item
+- write `none` instead of leaving optional sections blank
+- keep the issue self-contained enough for the Primary Agent to start without chat follow-up
+
 ## Ready Criteria
 
 An issue is `Ready` only if:
 
+- it is in the current Symphony pickup queue state for DayFlow (`Todo` today, `Ready` after that state exists)
 - title follows `[Agent] short task description`
+- the issue body uses the standard Linear issue template
+- `Goal` describes one issue-sized outcome
 - `Primary Agent` is exactly one value
+- `Primary Agent` matches a supported DayFlow agent
+- `Secondary Agents` is either `none` or a short sequential handoff list
 - `Inputs` references specific docs or files
+- `Constraints` records any must-keep boundaries or says `none`
 - `Done When` has 2 to 5 concrete checks
 - `Out of Scope` is filled in
+- `Test Notes` explains how the result should be checked or says `none`
+- `Follow-up Issues` lists linked issues or says `none`
 - the work should land in one PR
+- the issue does not satisfy any blocked criteria
 
 ## Issue Granularity Policy
 
@@ -129,14 +188,17 @@ All PRs must answer:
 - branch: `codex/<issue-id>-<short-slug>`
 - workspace: `<workspace-root>/<issue-id>`
 
-## Failure Handling
+## Blocked Criteria
 
 Move an issue to `Blocked` when:
 
+- the issue body is missing required sections or still contains placeholders such as `TBD`
 - required secrets are missing
 - local services cannot start
+- another unfinished issue or manual approval must happen first
 - docs conflict and product intent is unclear
 - the issue would require splitting into smaller tasks first
+- the work no longer fits one PR or one Primary Agent owner
 
 ## Required Supporting Artifacts
 
