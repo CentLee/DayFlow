@@ -107,7 +107,11 @@ Vertical slice exception:
 
 - Primary Agent owns the branch and completes the scoped work
 - The first Git action in any workspace is creating or switching to `codex/<issue-id>-<short-slug>`
-- `main` is never a working branch for agent implementation
+- `main` is the release branch and `develop` is the integration branch
+- agent implementation never happens directly on `main` or `develop`
+- issue branches start from `develop`
+- issue PRs target `develop` and should normally use squash merge
+- `develop` moves to `main` only after human-reviewed stabilization
 - Review Agent evaluates every PR
 
 ### Vertical Slice
@@ -131,6 +135,21 @@ All PRs must answer:
 
 - branch: `codex/<issue-id>-<short-slug>`
 - workspace: `<workspace-root>/<issue-id>`
+
+## Git Flow
+
+DayFlow uses a three-level branch strategy:
+
+- `main`: release branch
+- `develop`: active integration branch
+- `codex/<issue-id>-<short-slug>`: isolated implementation branch for a single Linear issue
+
+Expected merge flow:
+
+1. create or update issue branch from `develop`
+2. open PR from issue branch to `develop`
+3. squash-merge issue PR into `develop`
+4. when `develop` is stable, merge `develop` into `main`
 
 ## Failure Handling
 

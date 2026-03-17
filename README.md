@@ -30,6 +30,17 @@ The global harness layer owns reusable orchestration and agent design patterns.
 This repository only keeps the DayFlow-specific contracts, domain rules, and thin adapters needed
 for autonomous project execution.
 
+## Git Flow
+
+DayFlow uses:
+
+- `main` for release-ready history
+- `develop` for integrated working state
+- `codex/<issue-id>-<short-slug>` for isolated issue work
+
+Implementation PRs target `develop` and are normally squash-merged. `develop` is merged into `main`
+only after review and stabilization.
+
 ## Product Direction
 
 DayFlow is optimized around two ideas:

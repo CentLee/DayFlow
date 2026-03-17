@@ -75,6 +75,9 @@ The title should follow `[Agent] short task description`.
 - branch format: `codex/<issue-id>-<short-slug>`
 - workspace format: `<workspace-root>/<issue-id>`
 - one Linear issue per branch
+- issue branches should be created from `develop`
+- implementation PRs should target `develop`
+- `develop` should be merged into `main` only after stabilization
 
 ## GitHub Auth Scope
 

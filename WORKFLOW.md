@@ -60,12 +60,15 @@ Execution rules:
 1. Start with `WORKFLOW.md`, `docs/automation-model.md`, and the most relevant files under `docs/`.
 2. Read the relevant project skill before changing code.
 3. Before any file edit or commit, create or switch to an issue branch named `codex/<issue-id>-<short-slug>`.
-4. Never implement directly on `main`.
-5. Prefer one primary agent per issue.
-6. A small vertical slice is allowed only when backend, iOS, and integration handoff can stay sequential.
-7. Keep budget data private to the owner and never mix it with calendar sharing.
-8. Every PR must satisfy the review checklist in `docs/review-checklist.md`.
-9. Final reporting should contain completed work, tests run, blockers, and proof-of-work only.
+4. Never implement directly on `main` or `develop`.
+5. `main` is the release branch, `develop` is the integration branch, and all issue work starts from `develop`.
+6. Issue PRs target `develop` and should normally be squash-merged.
+7. Only stabilized `develop` changes move to `main`, using a human-reviewed merge flow.
+8. Prefer one primary agent per issue.
+9. A small vertical slice is allowed only when backend, iOS, and integration handoff can stay sequential.
+10. Keep budget data private to the owner and never mix it with calendar sharing.
+11. Every PR must satisfy the review checklist in `docs/review-checklist.md`.
+12. Final reporting should contain completed work, tests run, blockers, and proof-of-work only.
 
 Routing guide:
 
