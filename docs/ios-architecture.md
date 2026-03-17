@@ -50,7 +50,10 @@ Use SwiftUI Observation for state updates and async/await for network calls.
 
 ## Networking
 
-- preload `GET /me`, `GET /calendars`, `GET /budget/months/{current}`
+- auth requests use `POST /auth/login` and `POST /auth/register`, both returning `{ user, token }`
+- preload `GET /me`, then `GET /calendars` and `GET /budget/months/{current_budget_month_key}`
+- treat `GET /me` as the bootstrap payload for session user, grouped calendars, and current month routing
+- treat `GET /calendars` as the canonical flat calendar list used by `CalendarStore`
+- decode snake_case API payloads into Swift camelCase models with DTOs or explicit `CodingKeys`
 - optimistic budget save with rollback on failure
 - simple pull-to-refresh for calendar and budget
-
