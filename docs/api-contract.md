@@ -69,9 +69,9 @@ Response:
 ```json
 {
   "user": {
-    "id": "usr_123",
-    "email": "user@example.com",
-    "display_name": "Kakao"
+    "id": "usr_001",
+    "email": "owner@dayflow.local",
+    "display_name": "DayFlow Owner"
   },
   "owned_calendars": [
     {
@@ -79,9 +79,7 @@ Response:
       "name": "Personal",
       "color": "#1F6B5C",
       "updated_at": "2026-03-17T00:00:00Z"
-    }
-  ],
-  "shared_calendars": [
+    },
     {
       "id": "cal_002",
       "name": "Shared Home",
@@ -89,6 +87,7 @@ Response:
       "updated_at": "2026-03-17T00:00:00Z"
     }
   ],
+  "shared_calendars": [],
   "current_budget_month_key": "2026-03"
 }
 ```
@@ -97,6 +96,7 @@ Notes:
 
 - auth responses stay minimal for MVP and do not inline calendar or budget payloads
 - `/me` is the bootstrap source for session user data and current month routing
+- current memory mocks return the owner view above; invited-user shared calendar grouping is still documented separately in the domain model
 
 ## Calendars
 
