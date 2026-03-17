@@ -1,9 +1,52 @@
 import Foundation
 
+enum SessionPhase: Equatable {
+    case launching
+    case signedOut
+    case signedIn
+}
+
+enum AuthScreen: String, CaseIterable, Identifiable {
+    case login
+    case register
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .login:
+            return "로그인"
+        case .register:
+            return "회원가입"
+        }
+    }
+}
+
 struct SessionUser: Identifiable, Codable {
     let id: String
     let email: String
     let displayName: String
+}
+
+struct AuthResponse: Codable {
+    let user: SessionUser
+    let token: String
+}
+
+struct MeResponse: Codable {
+    let user: SessionUser
+    let ownedCalendars: [CalendarSummary]
+    let sharedCalendars: [CalendarSummary]
+    let currentBudgetMonthKey: String
+}
+
+struct APIErrorResponse: Codable {
+    struct Payload: Codable {
+        let code: String
+        let message: String
+    }
+
+    let error: Payload
 }
 
 struct CalendarSummary: Identifiable, Codable {
@@ -57,4 +100,3 @@ struct BudgetBoardResponse: Codable {
     var variableBuckets: [BudgetBucket]
     var billingReminders: [BudgetItem]
 }
-

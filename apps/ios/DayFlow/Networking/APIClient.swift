@@ -1,49 +1,212 @@
 import Foundation
 
-protocol APIClientProtocol {
-    func fetchCurrentUser() async throws -> SessionUser
-    func fetchCalendars() async throws -> [CalendarSummary]
+protocol APIClientProtocol: Sendable {
+    var hasActiveSession: Bool { get }
+
+    func login(email: String, password: String) async throws
+    func register(email: String, displayName: String, password: String, inviteCode: String) async throws
+    func fetchCurrentSession() async throws -> MeResponse
     func fetchBudget(monthKey: String) async throws -> BudgetBoardResponse
+    func clearSession()
 }
 
-struct MockAPIClient: APIClientProtocol {
-    func fetchCurrentUser() async throws -> SessionUser {
-        SessionUser(id: "usr_001", email: "owner@dayflow.local", displayName: "DayFlow Owner")
+protocol SessionTokenStore: AnyObject, Sendable {
+    var token: String? { get set }
+}
+
+final class UserDefaultsSessionTokenStore: SessionTokenStore, @unchecked Sendable {
+    private let defaults: UserDefaults
+    private let tokenKey = "dayflow.session.token"
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
     }
 
-    func fetchCalendars() async throws -> [CalendarSummary] {
-        [
-            CalendarSummary(id: "cal_001", name: "Personal", color: "#1F6B5C", updatedAt: ISO8601DateFormatter().string(from: .now)),
-            CalendarSummary(id: "cal_002", name: "Shared Home", color: "#D8A21D", updatedAt: ISO8601DateFormatter().string(from: .now))
-        ]
+    var token: String? {
+        get { defaults.string(forKey: tokenKey) }
+        set {
+            if let newValue {
+                defaults.set(newValue, forKey: tokenKey)
+            } else {
+                defaults.removeObject(forKey: tokenKey)
+            }
+        }
+    }
+}
+
+enum APIClientError: LocalizedError, Equatable {
+    case invalidConfiguration
+    case invalidResponse
+    case missingSession
+    case unauthorized(String)
+    case server(String)
+    case transport(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidConfiguration:
+            return "API 주소 설정이 올바르지 않습니다."
+        case .invalidResponse:
+            return "서버 응답을 확인할 수 없습니다."
+        case .missingSession:
+            return "로그인이 필요합니다."
+        case let .unauthorized(message), let .server(message), let .transport(message):
+            return message
+        }
+    }
+}
+
+struct APIClient: APIClientProtocol, @unchecked Sendable {
+    private let baseURL: URL
+    private let session: URLSession
+    private let tokenStore: SessionTokenStore
+
+    init(
+        baseURL: URL,
+        session: URLSession = .shared,
+        tokenStore: SessionTokenStore = UserDefaultsSessionTokenStore()
+    ) {
+        self.baseURL = baseURL
+        self.session = session
+        self.tokenStore = tokenStore
+    }
+
+    var hasActiveSession: Bool {
+        tokenStore.token?.isEmpty == false
+    }
+
+    static func live() -> APIClient {
+        let environment = ProcessInfo.processInfo.environment
+        let baseURLString = environment["DAYFLOW_API_BASE_URL"] ?? "http://127.0.0.1:8080/v1"
+        guard let baseURL = URL(string: baseURLString) else {
+            preconditionFailure("Invalid DAYFLOW_API_BASE_URL: \(baseURLString)")
+        }
+        return APIClient(baseURL: baseURL)
+    }
+
+    func login(email: String, password: String) async throws {
+        let response: AuthResponse = try await send(
+            path: "auth/login",
+            method: "POST",
+            body: LoginRequest(email: email, password: password)
+        )
+        tokenStore.token = response.token
+    }
+
+    func register(email: String, displayName: String, password: String, inviteCode: String) async throws {
+        let response: AuthResponse = try await send(
+            path: "auth/register",
+            method: "POST",
+            body: RegisterRequest(email: email, displayName: displayName, password: password, inviteCode: inviteCode)
+        )
+        tokenStore.token = response.token
+    }
+
+    func fetchCurrentSession() async throws -> MeResponse {
+        try await send(path: "me", method: "GET", requiresAuthorization: true)
     }
 
     func fetchBudget(monthKey: String) async throws -> BudgetBoardResponse {
-        BudgetBoardResponse(
-            month: BudgetMonth(
-                id: "bmon_001",
-                monthKey: monthKey,
-                baseBudgetAmount: 510,
-                currentCashAmount: 118,
-                savingAmount: 200,
-                carryOverAmount: 0,
-                remainingBudgetAmount: 145,
-                updatedAt: ISO8601DateFormatter().string(from: .now)
-            ),
-            summary: BudgetSummary(fixedCostTotal: 153, variableBucketTotal: 12, freeCashAmount: 118),
-            fixedItems: [
-                BudgetItem(id: "itm_001", name: "월세 및 관리비", kind: "fixed", amount: 21, enabled: true, note: nil, billingDayLabel: "20일", updatedAt: ISO8601DateFormatter().string(from: .now)),
-                BudgetItem(id: "itm_002", name: "대출이자", kind: "fixed", amount: 36, enabled: true, note: nil, billingDayLabel: "5일", updatedAt: ISO8601DateFormatter().string(from: .now)),
-                BudgetItem(id: "itm_003", name: "신용카드", kind: "fixed", amount: 88, enabled: true, note: nil, billingDayLabel: "26일", updatedAt: ISO8601DateFormatter().string(from: .now))
-            ],
-            variableBuckets: [
-                BudgetBucket(id: "bkt_001", name: "점심 및 주말 식대", plannedAmount: 12, actualAmount: 0, formulaHint: "평일 1 + 주말 3", updatedAt: ISO8601DateFormatter().string(from: .now)),
-                BudgetBucket(id: "bkt_002", name: "유동 금액", plannedAmount: 0, actualAmount: 0, formulaHint: nil, updatedAt: ISO8601DateFormatter().string(from: .now))
-            ],
-            billingReminders: [
-                BudgetItem(id: "rem_001", name: "보험비 정산", kind: "reminder", amount: 0, enabled: true, note: nil, billingDayLabel: "25일", updatedAt: ISO8601DateFormatter().string(from: .now))
-            ]
-        )
+        try await send(path: "budget/months/\(monthKey)", method: "GET", requiresAuthorization: true)
+    }
+
+    func clearSession() {
+        tokenStore.token = nil
+    }
+
+    private func send<Response: Decodable>(
+        path: String,
+        method: String,
+        requiresAuthorization: Bool = false
+    ) async throws -> Response {
+        try await send(path: path, method: method, body: Optional<Data>.none, requiresAuthorization: requiresAuthorization)
+    }
+
+    private func send<RequestBody: Encodable, Response: Decodable>(
+        path: String,
+        method: String,
+        body: RequestBody,
+        requiresAuthorization: Bool = false
+    ) async throws -> Response {
+        let bodyData = try Self.makeEncoder().encode(body)
+        return try await send(path: path, method: method, body: bodyData, requiresAuthorization: requiresAuthorization)
+    }
+
+    private func send<Response: Decodable>(
+        path: String,
+        method: String,
+        body: Data?,
+        requiresAuthorization: Bool
+    ) async throws -> Response {
+        var request = URLRequest(url: baseURL.appending(path: path))
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        if let body {
+            request.httpBody = body
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+
+        if requiresAuthorization {
+            guard let token = tokenStore.token, token.isEmpty == false else {
+                throw APIClientError.missingSession
+            }
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw APIClientError.invalidResponse
+            }
+
+            guard 200 ..< 300 ~= httpResponse.statusCode else {
+                if let errorResponse = try? Self.makeDecoder().decode(APIErrorResponse.self, from: data) {
+                    if httpResponse.statusCode == 401 {
+                        throw APIClientError.unauthorized(errorResponse.error.message)
+                    }
+                    throw APIClientError.server(errorResponse.error.message)
+                }
+
+                if httpResponse.statusCode == 401 {
+                    throw APIClientError.unauthorized("세션이 만료되었습니다. 다시 로그인해 주세요.")
+                }
+                throw APIClientError.server("요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.")
+            }
+
+            do {
+                return try Self.makeDecoder().decode(Response.self, from: data)
+            } catch {
+                throw APIClientError.invalidResponse
+            }
+        } catch let error as APIClientError {
+            throw error
+        } catch {
+            throw APIClientError.transport("서버에 연결할 수 없습니다. API 실행 상태를 확인해 주세요.")
+        }
+    }
+
+    private static func makeDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return decoder
+    }
+
+    private static func makeEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        return encoder
     }
 }
 
+private struct LoginRequest: Encodable {
+    let email: String
+    let password: String
+}
+
+private struct RegisterRequest: Encodable {
+    let email: String
+    let displayName: String
+    let password: String
+    let inviteCode: String
+}

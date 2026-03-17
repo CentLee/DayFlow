@@ -4,16 +4,24 @@ struct RootView: View {
     @Environment(AppStore.self) private var appStore
 
     var body: some View {
-        Group {
-            if appStore.sessionUser == nil {
-                LoginView()
-            } else {
-                MainTabView()
-            }
-        }
-        .task {
-            if appStore.sessionUser == nil {
+        content
+            .task {
                 await appStore.bootstrap()
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch appStore.sessionPhase {
+        case .launching:
+            LaunchingView()
+        case .signedOut:
+            AuthView()
+        case .signedIn:
+            if appStore.sessionUser != nil {
+                MainTabView()
+            } else {
+                LaunchingView()
             }
         }
     }
@@ -34,19 +42,171 @@ struct MainTabView: View {
     }
 }
 
-struct LoginView: View {
+private struct LaunchingView: View {
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("DayFlow")
-                    .font(.largeTitle.bold())
-                Text("공유 캘린더와 개인 월간 예산 보드를 함께 관리합니다.")
-                    .foregroundStyle(.secondary)
-                Button("데모 세션으로 시작") {}
-                    .buttonStyle(.borderedProminent)
-            }
-            .padding(24)
+        VStack(spacing: 16) {
+            ProgressView()
+                .controlSize(.large)
+            Text("세션을 불러오는 중입니다")
+                .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+struct AuthView: View {
+    @Environment(AppStore.self) private var appStore
+
+    var body: some View {
+        @Bindable var appStore = appStore
+
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("DayFlow")
+                            .font(.largeTitle.bold())
+                        Text("공유 캘린더와 개인 월간 예산 보드를 함께 관리합니다.")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let message = appStore.bootstrapErrorMessage ?? appStore.authErrorMessage {
+                        ErrorBanner(message: message)
+                    }
+
+                    Picker("인증 화면", selection: $appStore.authScreen) {
+                        ForEach(AuthScreen.allCases) { screen in
+                            Text(screen.title).tag(screen)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    switch appStore.authScreen {
+                    case .login:
+                        LoginFormView()
+                    case .register:
+                        RegisterFormView()
+                    }
+                }
+                .padding(24)
+            }
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+private struct LoginFormView: View {
+    @Environment(AppStore.self) private var appStore
+
+    var body: some View {
+        @Bindable var appStore = appStore
+
+        VStack(alignment: .leading, spacing: 16) {
+            Text("기존 계정으로 바로 시작")
+                .font(.headline)
+
+            TextField("이메일", text: $appStore.loginEmail)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.emailAddress)
+                .autocorrectionDisabled()
+                .textFieldStyle(.roundedBorder)
+
+            SecureField("비밀번호", text: $appStore.loginPassword)
+                .textFieldStyle(.roundedBorder)
+
+            Button {
+                Task {
+                    await appStore.login()
+                }
+            } label: {
+                HStack {
+                    if appStore.isAuthenticating {
+                        ProgressView()
+                            .tint(.white)
+                    }
+                    Text("로그인")
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(appStore.isAuthenticating)
+
+            Button("초대받은 계정이신가요? 가입으로 이동") {
+                appStore.authScreen = .register
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct RegisterFormView: View {
+    @Environment(AppStore.self) private var appStore
+
+    var body: some View {
+        @Bindable var appStore = appStore
+
+        VStack(alignment: .leading, spacing: 16) {
+            Text("초대 코드로 계정을 만듭니다")
+                .font(.headline)
+
+            TextField("이메일", text: $appStore.registerEmail)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.emailAddress)
+                .autocorrectionDisabled()
+                .textFieldStyle(.roundedBorder)
+
+            TextField("이름", text: $appStore.registerDisplayName)
+                .textFieldStyle(.roundedBorder)
+
+            SecureField("비밀번호", text: $appStore.registerPassword)
+                .textFieldStyle(.roundedBorder)
+
+            TextField("초대 코드", text: $appStore.registerInviteCode)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .textFieldStyle(.roundedBorder)
+
+            Text("공유 캘린더 초대와 연결된 이메일, 초대 코드가 필요합니다.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            Button {
+                Task {
+                    await appStore.register()
+                }
+            } label: {
+                HStack {
+                    if appStore.isAuthenticating {
+                        ProgressView()
+                            .tint(.white)
+                    }
+                    Text("회원가입")
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(appStore.isAuthenticating)
+
+            Button("이미 계정이 있나요? 로그인으로 이동") {
+                appStore.authScreen = .login
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct ErrorBanner: View {
+    let message: String
+
+    var body: some View {
+        Text(message)
+            .font(.subheadline)
+            .foregroundStyle(.red)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -55,12 +215,20 @@ struct CalendarListView: View {
 
     var body: some View {
         NavigationStack {
-            List(appStore.calendarStore.calendars) { calendar in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(calendar.name)
-                    Text(calendar.updatedAt)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            Group {
+                if let errorMessage = appStore.calendarStore.errorMessage {
+                    ContentUnavailableView("캘린더를 불러오지 못했습니다", systemImage: "calendar.badge.exclamationmark", description: Text(errorMessage))
+                } else if appStore.calendarStore.calendars.isEmpty {
+                    ContentUnavailableView("표시할 캘린더가 없습니다", systemImage: "calendar")
+                } else {
+                    List(appStore.calendarStore.calendars) { calendar in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(calendar.name)
+                            Text(calendar.updatedAt)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
             .navigationTitle("Calendars")
@@ -75,13 +243,18 @@ struct BudgetBoardView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    if let board = appStore.budgetStore.board {
+                    if appStore.budgetStore.isLoading {
+                        ProgressView()
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    } else if let errorMessage = appStore.budgetStore.errorMessage {
+                        ErrorBanner(message: errorMessage)
+                    } else if let board = appStore.budgetStore.board {
                         KPICards(board: board)
                         FixedItemsSection(items: board.fixedItems)
                         VariableBucketsSection(buckets: board.variableBuckets)
                         BillingRemindersSection(reminders: board.billingReminders)
                     } else {
-                        ProgressView()
+                        ContentUnavailableView("예산 보드가 없습니다", systemImage: "chart.bar.doc.horizontal")
                     }
                 }
                 .padding(20)
@@ -207,6 +380,12 @@ struct SettingsView: View {
                     Section("Account") {
                         Text(user.displayName)
                         Text(user.email)
+                    }
+                }
+
+                Section {
+                    Button("로그아웃", role: .destructive) {
+                        appStore.logout()
                     }
                 }
             }
