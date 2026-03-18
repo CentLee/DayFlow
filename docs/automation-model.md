@@ -15,6 +15,8 @@ Automatic:
 - branch and PR creation
 - CI result collection
 - PR-to-Linear state reconciliation
+- review finding to draft / `In Progress` reconciliation
+- proof-of-work refresh for open develop-targeted PRs
 - review-lane execution for `In Review` issues
 
 Manual:
@@ -113,6 +115,7 @@ Vertical slice exception:
 ### Default
 
 - Primary Agent owns the branch and completes the scoped work
+- Primary Agent remains responsible for the issue until it is merge-ready, including review-follow-up commits on the same branch
 - The first Git action in any workspace is creating or switching to `codex/<issue-id>-<short-slug>`
 - `main` is the release branch and `develop` is the integration branch
 - agent implementation never happens directly on `main` or `develop`
@@ -145,6 +148,7 @@ DayFlow now enforces these automatic state transitions:
 - no PR: issue stays in `Todo` or `In Progress`
 - open draft PR: issue stays in `In Progress`
 - open ready-for-review PR: issue moves to `In Review`
+- ready PR with fresh review findings: PR returns to draft and issue returns to `In Progress`
 - merged PR: issue moves to `Done`
 - `In Review` issues are handled by the review lane, not the implementation lane
 
@@ -155,6 +159,9 @@ The reconciliation source of truth is the issue branch name:
 Automation scripts:
 
 - `scripts/sync_linear_pr_states.sh`
+- `scripts/reconcile_review_feedback.sh`
+- `scripts/collect_pr_proof.sh`
+- `scripts/update_pr_proof.sh`
 - `scripts/run_symphony.sh`
 - `WORKFLOW.review.md`
 

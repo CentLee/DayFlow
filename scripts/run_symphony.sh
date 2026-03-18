@@ -6,6 +6,8 @@ SYMPHONY_DIR="$ROOT_DIR/vendor/symphony/elixir"
 IMPLEMENTATION_WORKFLOW_FILE="$ROOT_DIR/WORKFLOW.md"
 REVIEW_WORKFLOW_FILE="$ROOT_DIR/WORKFLOW.review.md"
 SYNC_SCRIPT="$ROOT_DIR/scripts/sync_linear_pr_states.sh"
+REVIEW_FEEDBACK_SCRIPT="$ROOT_DIR/scripts/reconcile_review_feedback.sh"
+PROOF_UPDATE_SCRIPT="$ROOT_DIR/scripts/update_pr_proof.sh"
 SYNC_INTERVAL_SECONDS="${SYNC_INTERVAL_SECONDS:-20}"
 
 if [[ -z "${LINEAR_API_KEY:-}" ]]; then
@@ -18,6 +20,8 @@ export GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}"
 sync_loop() {
   while true; do
     "$SYNC_SCRIPT" || true
+    "$REVIEW_FEEDBACK_SCRIPT" || true
+    "$PROOF_UPDATE_SCRIPT" || true
     sleep "$SYNC_INTERVAL_SECONDS"
   done
 }
