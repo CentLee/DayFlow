@@ -39,7 +39,7 @@ Repository context:
 
 - Product and domain truth lives in `docs/`.
 - Agent routing and skills live in `.codex/agents/` and `.codex/skills/`.
-- DayFlow uses a semi-automated workflow. Implement, update the PR, refresh proof of work, and keep ownership of the issue through review follow-up until the PR is merge-ready.
+- DayFlow uses a semi-automated single-lane workflow. The primary agent keeps ownership of the issue through implementation, proof refresh, review follow-up, and merge readiness.
 
 Issue context:
 
@@ -65,10 +65,11 @@ Execution rules:
 6. Issue PRs target `develop` and should normally be squash-merged.
 7. Only stabilized `develop` changes move to `main`, using a human-reviewed merge flow.
 8. Prefer one primary agent per issue.
-9. A small vertical slice is allowed only when backend, iOS, and integration handoff can stay sequential.
-10. Keep budget data private to the owner and never mix it with calendar sharing.
-11. Every PR must satisfy the review checklist in `docs/review-checklist.md`.
-12. Final reporting should contain completed work, tests run, blockers, proof-of-work, and any review feedback addressed in this round.
+9. The primary agent remains the lifecycle owner until the issue is merge-ready or explicitly blocked.
+10. A small vertical slice is allowed only when backend, iOS, and integration handoff can stay sequential.
+11. Keep budget data private to the owner and never mix it with calendar sharing.
+12. Every PR must satisfy the review checklist in `docs/review-checklist.md`.
+13. Final reporting should contain completed work, tests run, blockers, proof-of-work, and any review feedback addressed in this round.
 
 Routing guide:
 
@@ -80,9 +81,9 @@ Routing guide:
 
 State handling:
 
-- `Todo`: runnable queue state, move to `In Progress` when active work starts
-- `In Progress`: implementation phase
-- `In Review`: PR is open and waiting on review or review follow-up
+- `Todo`: runnable queue state
+- `In Progress`: active ownership state for implementation or review follow-up
+- `In Review`: PR is open and ready for review
 - `Done`: terminal
 - `Canceled` and `Duplicate`: terminal
 

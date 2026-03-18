@@ -17,7 +17,6 @@ Automatic:
 - PR-to-Linear state reconciliation
 - review finding to draft / `In Progress` reconciliation
 - proof-of-work refresh for open develop-targeted PRs
-- review-lane execution for `In Review` issues
 
 Manual:
 
@@ -35,16 +34,16 @@ Manual:
 - launches `codex app-server`
 - collects branch, PR, and CI output
 
-DayFlow runs Symphony in two lanes:
+DayFlow runs Symphony in one lifecycle-owner lane:
 
-- implementation lane: `Todo`, `In Progress`
-- review lane: `In Review`
+- lifecycle-owner lane: `Todo`, `In Progress`
 
 ### dayflow-orchestrator
 
 - routes work to the correct agent path
 - enforces DayFlow handoff rules
 - keeps multi-agent issues sequential
+- advances the queue only after the current issue owner has either closed the review loop or marked the issue blocked
 
 ### Project Agents
 
@@ -73,8 +72,8 @@ DayFlow runs Symphony in two lanes:
 
 ### In Review
 
-- PR is open
-- review findings are being addressed
+- PR is open and ready for review
+- fresh blocking findings should push the issue back to `In Progress`
 
 ### Blocked
 
@@ -122,7 +121,7 @@ Vertical slice exception:
 - issue branches start from `develop`
 - issue PRs target `develop` and should normally use squash merge
 - `develop` moves to `main` only after human-reviewed stabilization
-- Review Agent evaluates every PR
+- Review Agent provides the review standard, but review follow-up returns to the same primary owner
 
 ### Vertical Slice
 
@@ -150,7 +149,7 @@ DayFlow now enforces these automatic state transitions:
 - open ready-for-review PR: issue moves to `In Review`
 - ready PR with fresh review findings: PR returns to draft and issue returns to `In Progress`
 - merged PR: issue moves to `Done`
-- `In Review` issues are handled by the review lane, not the implementation lane
+- the same issue owner resumes work after review findings
 
 The reconciliation source of truth is the issue branch name:
 
@@ -163,7 +162,6 @@ Automation scripts:
 - `scripts/collect_pr_proof.sh`
 - `scripts/update_pr_proof.sh`
 - `scripts/run_symphony.sh`
-- `WORKFLOW.review.md`
 
 ## Branch and Workspace Naming
 
@@ -198,6 +196,7 @@ Move an issue to `Blocked` when:
 
 - `WORKFLOW.md`
 - `docs/automation-model.md`
+- `docs/pain-points.md`
 - `docs/harness-skill-model.md`
 - `docs/iteration-queue.md`
 - `docs/review-checklist.md`
