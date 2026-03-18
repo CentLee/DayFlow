@@ -74,7 +74,13 @@ struct AuthView: View {
                         ErrorBanner(message: message)
                     }
 
-                    Picker("인증 화면", selection: $appStore.authScreen) {
+                    Picker(
+                        "인증 화면",
+                        selection: Binding(
+                            get: { appStore.authScreen },
+                            set: { appStore.setAuthScreen($0) }
+                        )
+                    ) {
                         ForEach(AuthScreen.allCases) { screen in
                             Text(screen.title).tag(screen)
                         }
@@ -132,7 +138,7 @@ private struct LoginFormView: View {
             .disabled(appStore.isAuthenticating)
 
             Button("초대받은 계정이신가요? 가입으로 이동") {
-                appStore.authScreen = .register
+                appStore.showRegister()
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
@@ -189,7 +195,7 @@ private struct RegisterFormView: View {
             .disabled(appStore.isAuthenticating)
 
             Button("이미 계정이 있나요? 로그인으로 이동") {
-                appStore.authScreen = .login
+                appStore.showLogin()
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)

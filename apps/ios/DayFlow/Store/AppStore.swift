@@ -48,6 +48,7 @@ final class AppStore {
 
     @MainActor
     func login() async {
+        bootstrapErrorMessage = nil
         authErrorMessage = validateLogin()
         guard authErrorMessage == nil else { return }
 
@@ -72,6 +73,7 @@ final class AppStore {
 
     @MainActor
     func register() async {
+        bootstrapErrorMessage = nil
         authErrorMessage = validateRegister()
         guard authErrorMessage == nil else { return }
 
@@ -110,6 +112,23 @@ final class AppStore {
         bootstrapErrorMessage = nil
         calendarStore.reset()
         budgetStore.reset()
+    }
+
+    @MainActor
+    func showLogin() {
+        setAuthScreen(.login)
+    }
+
+    @MainActor
+    func showRegister() {
+        setAuthScreen(.register)
+    }
+
+    @MainActor
+    func setAuthScreen(_ screen: AuthScreen) {
+        authScreen = screen
+        authErrorMessage = nil
+        bootstrapErrorMessage = nil
     }
 
     @MainActor

@@ -39,6 +39,32 @@ struct AppStoreTests {
     }
 
     @Test
+    func registerSuccessBootstrapsSessionAndData() async {
+        let apiClient = StubAPIClient()
+        apiClient.registerHandler = { _, _, _, _ in
+            apiClient.hasActiveSession = true
+        }
+        apiClient.currentSession = .sample()
+        apiClient.budgetBoard = .sample(monthKey: "2026-03")
+
+        let appStore = AppStore(apiClient: apiClient)
+        appStore.authScreen = .register
+        appStore.registerEmail = "guest@dayflow.local"
+        appStore.registerDisplayName = "Guest"
+        appStore.registerPassword = "secret1234"
+        appStore.registerInviteCode = "invite_abc"
+
+        await appStore.register()
+
+        #expect(appStore.sessionPhase == .signedIn)
+        #expect(appStore.sessionUser?.email == "owner@dayflow.local")
+        #expect(appStore.calendarStore.calendars.count == 2)
+        #expect(appStore.budgetStore.board?.month.monthKey == "2026-03")
+        #expect(appStore.authErrorMessage == nil)
+        #expect(appStore.bootstrapErrorMessage == nil)
+    }
+
+    @Test
     func registerFailureSurfacesAuthError() async {
         let apiClient = StubAPIClient()
         apiClient.registerHandler = { _, _, _, _ in
@@ -75,18 +101,74 @@ struct AppStoreTests {
         #expect(appStore.bootstrapErrorMessage == "invalid session")
         #expect(apiClient.clearSessionCalled)
     }
+
+    @Test
+    func loginValidationReplacesBootstrapErrorAndSkipsRequest() async {
+        let apiClient = StubAPIClient()
+        let appStore = AppStore(apiClient: apiClient)
+        appStore.bootstrapErrorMessage = "세션을 복원하지 못했습니다."
+
+        await appStore.login()
+
+        #expect(appStore.authErrorMessage == "이메일과 비밀번호를 입력해 주세요.")
+        #expect(appStore.bootstrapErrorMessage == nil)
+        #expect(apiClient.loginCalls == 0)
+        #expect(appStore.isAuthenticating == false)
+    }
+
+    @Test
+    func bootstrapBudgetFailureKeepsSignedInSession() async {
+        let apiClient = StubAPIClient()
+        apiClient.hasActiveSession = true
+        apiClient.currentSession = .sample()
+        apiClient.fetchBudgetHandler = { _ in
+            throw APIClientError.server("예산 보드를 불러오지 못했습니다.")
+        }
+
+        let appStore = AppStore(apiClient: apiClient)
+
+        await appStore.bootstrap()
+
+        #expect(appStore.sessionPhase == .signedIn)
+        #expect(appStore.sessionUser?.email == "owner@dayflow.local")
+        #expect(appStore.calendarStore.calendars.count == 2)
+        #expect(appStore.budgetStore.board == nil)
+        #expect(appStore.budgetStore.errorMessage == "예산 보드를 불러오지 못했습니다.")
+        #expect(appStore.bootstrapErrorMessage == nil)
+    }
+
+    @Test
+    func authScreenSwitchClearsVisibleErrors() async {
+        let apiClient = StubAPIClient()
+        let appStore = AppStore(apiClient: apiClient)
+        appStore.authErrorMessage = "로그인에 실패했습니다."
+        appStore.bootstrapErrorMessage = "세션을 복원하지 못했습니다."
+
+        appStore.showRegister()
+        #expect(appStore.authScreen == .register)
+        #expect(appStore.authErrorMessage == nil)
+        #expect(appStore.bootstrapErrorMessage == nil)
+
+        appStore.authErrorMessage = "초대 코드를 확인해 주세요."
+        appStore.showLogin()
+        #expect(appStore.authScreen == .login)
+        #expect(appStore.authErrorMessage == nil)
+    }
 }
 
 private final class StubAPIClient: APIClientProtocol, @unchecked Sendable {
     var hasActiveSession = false
     var clearSessionCalled = false
+    var loginCalls = 0
     var currentSession: MeResponse?
     var budgetBoard: BudgetBoardResponse?
     var loginHandler: (@Sendable (String, String) async throws -> Void)?
     var registerHandler: (@Sendable (String, String, String, String) async throws -> Void)?
     var fetchCurrentSessionHandler: (@Sendable () async throws -> MeResponse)?
+    var fetchBudgetHandler: (@Sendable (String) async throws -> BudgetBoardResponse)?
 
     func login(email: String, password: String) async throws {
+        loginCalls += 1
         if let loginHandler {
             try await loginHandler(email, password)
         }
@@ -108,7 +190,10 @@ private final class StubAPIClient: APIClientProtocol, @unchecked Sendable {
     }
 
     func fetchBudget(monthKey: String) async throws -> BudgetBoardResponse {
-        budgetBoard ?? .sample(monthKey: monthKey)
+        if let fetchBudgetHandler {
+            return try await fetchBudgetHandler(monthKey)
+        }
+        return budgetBoard ?? .sample(monthKey: monthKey)
     }
 
     func clearSession() {
