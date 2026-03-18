@@ -102,7 +102,7 @@ Automatic reconciliation rules:
 
 - draft PR keeps the issue in `In Progress`
 - ready-for-review PR moves the issue to `In Review`
-- fresh review findings return the PR to draft and the issue to `In Progress`
+- fresh review findings return the PR to draft and the issue to `Todo`
 - merged PR moves the issue to `Done`
 - review follow-up returns to the same issue owner instead of a separate review lane
 

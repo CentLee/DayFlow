@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="/Users/kakao_ent/Documents/DayFlow"
 PROOF_SCRIPT="$ROOT_DIR/scripts/collect_pr_proof.sh"
 REPO_SLUG="CentLee/DayFlow"
+MAX_RETRIES="${MAX_RETRIES:-3}"
+RETRY_DELAY_SECONDS="${RETRY_DELAY_SECONDS:-2}"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required" >&2
@@ -19,7 +21,21 @@ tmp_file="$(mktemp)"
 json_file="$(mktemp)"
 trap 'rm -f "$tmp_file" "$json_file"' EXIT
 
-prs_json=$(GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" gh pr list --state open --limit 100 --json number,baseRefName)
+retry() {
+  local attempt=1
+  while true; do
+    if "$@"; then
+      return 0
+    fi
+    if (( attempt >= MAX_RETRIES )); then
+      return 1
+    fi
+    sleep "$RETRY_DELAY_SECONDS"
+    attempt=$((attempt + 1))
+  done
+}
+
+prs_json=$(retry env GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" gh pr list --state open --limit 100 --json number,baseRefName)
 
 while IFS= read -r pr_row; do
   pr_number=$(jq -r '.number' <<<"$pr_row")
@@ -27,8 +43,8 @@ while IFS= read -r pr_row; do
     continue
   fi
 
-  GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" "$PROOF_SCRIPT" "$pr_number" >"$tmp_file"
+  retry env GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" "$PROOF_SCRIPT" "$pr_number" >"$tmp_file"
   jq -Rs '{body: .}' <"$tmp_file" >"$json_file"
-  GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" gh api "repos/${REPO_SLUG}/pulls/${pr_number}" -X PATCH --input "$json_file" >/dev/null
+  retry env GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" gh api "repos/${REPO_SLUG}/pulls/${pr_number}" -X PATCH --input "$json_file" >/dev/null
   echo "updated proof-of-work for PR #${pr_number}"
 done < <(jq -c '.[]' <<<"$prs_json")

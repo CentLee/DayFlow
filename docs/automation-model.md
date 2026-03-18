@@ -17,6 +17,7 @@ Automatic:
 - PR-to-Linear state reconciliation
 - review finding to draft / `Todo` reconciliation
 - active workspace ownership to `In Progress` reconciliation
+- post-run outcome validation for stale in-progress work without PR closure
 - proof-of-work refresh for open develop-targeted PRs
 
 Manual:
@@ -163,6 +164,7 @@ Automation scripts:
 - `scripts/sync_linear_pr_states.sh`
 - `scripts/reconcile_issue_ownership.sh`
 - `scripts/reconcile_review_feedback.sh`
+- `scripts/validate_issue_outcomes.sh`
 - `scripts/collect_pr_proof.sh`
 - `scripts/update_pr_proof.sh`
 - `scripts/run_symphony.sh`
