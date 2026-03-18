@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="/Users/kakao_ent/Documents/DayFlow"
 PROJECT_ID="fdeb5f63-05f2-4ab2-bb9d-a12dc0084b9f"
-STATE_IN_PROGRESS_ID="b88769c5-551d-4248-b834-c2e3975ef7df"
+STATE_TODO_ID="452888e8-7d81-4229-bf16-d0876c3098a3"
 
 if [[ -z "${LINEAR_API_KEY:-}" ]]; then
   echo "LINEAR_API_KEY is required" >&2
@@ -121,9 +121,9 @@ while IFS= read -r pr_row; do
     GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" gh pr ready --undo "$pr_number" >/dev/null
   fi
 
-  if [[ "$current_state" != "In Progress" ]]; then
-    linear_mutation "$issue_id" "$STATE_IN_PROGRESS_ID"
+  if [[ "$current_state" != "Todo" ]]; then
+    linear_mutation "$issue_id" "$STATE_TODO_ID"
   fi
 
-  echo "returned ${issue_key} to In Progress from review findings"
+  echo "returned ${issue_key} to Todo from review findings"
 done < <(jq -c '.[]' <<<"$pr_list_json")
