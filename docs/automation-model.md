@@ -15,7 +15,8 @@ Automatic:
 - branch and PR creation
 - CI result collection
 - PR-to-Linear state reconciliation
-- review finding to draft / `In Progress` reconciliation
+- review finding to draft / `Todo` reconciliation
+- active workspace ownership to `In Progress` reconciliation
 - proof-of-work refresh for open develop-targeted PRs
 
 Manual:
@@ -36,7 +37,7 @@ Manual:
 
 DayFlow runs Symphony in one lifecycle-owner lane:
 
-- lifecycle-owner lane: `Todo`, `In Progress`
+- lifecycle-owner lane: `Todo`
 
 ### dayflow-orchestrator
 
@@ -57,8 +58,9 @@ DayFlow runs Symphony in one lifecycle-owner lane:
 
 ### Todo
 
-- not executable yet
-- may be underspecified or still under product discussion
+- runnable queue state
+- new work enters here
+- retries also re-enter here
 
 ### Ready
 
@@ -68,12 +70,13 @@ DayFlow runs Symphony in one lifecycle-owner lane:
 ### In Progress
 
 - workspace exists
-- Codex is actively working the issue
+- Codex is actively working the issue or the last implementation attempt has completed
+- not directly runnable by Symphony
 
 ### In Review
 
 - PR is open and ready for review
-- fresh blocking findings should push the issue back to `In Progress`
+- fresh blocking findings should push the issue back to `Todo`
 
 ### Blocked
 
@@ -144,10 +147,10 @@ All PRs must answer:
 
 DayFlow now enforces these automatic state transitions:
 
-- no PR: issue stays in `Todo` or `In Progress`
+- no PR: issue stays in `Todo` before pickup, then becomes `In Progress` while owned
 - open draft PR: issue stays in `In Progress`
 - open ready-for-review PR: issue moves to `In Review`
-- ready PR with fresh review findings: PR returns to draft and issue returns to `In Progress`
+- ready PR with fresh review findings: PR returns to draft and issue returns to `Todo`
 - merged PR: issue moves to `Done`
 - the same issue owner resumes work after review findings
 
@@ -158,6 +161,7 @@ The reconciliation source of truth is the issue branch name:
 Automation scripts:
 
 - `scripts/sync_linear_pr_states.sh`
+- `scripts/reconcile_issue_ownership.sh`
 - `scripts/reconcile_review_feedback.sh`
 - `scripts/collect_pr_proof.sh`
 - `scripts/update_pr_proof.sh`

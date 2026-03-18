@@ -5,7 +5,6 @@ tracker:
   project_slug: "fe259ecd9833"
   active_states:
     - Todo
-    - In Progress
   terminal_states:
     - Done
     - Canceled
@@ -70,6 +69,7 @@ Execution rules:
 11. Keep budget data private to the owner and never mix it with calendar sharing.
 12. Every PR must satisfy the review checklist in `docs/review-checklist.md`.
 13. Final reporting should contain completed work, tests run, blockers, proof-of-work, and any review feedback addressed in this round.
+14. The orchestration guardrail may promote an owned workspace from `Todo` to `In Progress` before the first PR exists. `Todo` is the only runnable queue state, so use it again only when the issue should be retried.
 
 Routing guide:
 
@@ -81,8 +81,8 @@ Routing guide:
 
 State handling:
 
-- `Todo`: runnable queue state
-- `In Progress`: active ownership state for implementation or review follow-up
+- `Todo`: runnable queue state and retry queue state
+- `In Progress`: active ownership state for the current or most recent implementation attempt
 - `In Review`: PR is open and ready for review
 - `Done`: terminal
 - `Canceled` and `Duplicate`: terminal
