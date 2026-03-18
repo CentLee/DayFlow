@@ -32,7 +32,12 @@ server:
   port: 4101
 ---
 
-You are the DayFlow review runner for a Linear issue that is already in `In Review`.
+Legacy note:
+
+- this workflow is no longer the default DayFlow operating model
+- `scripts/run_symphony.sh` now starts only `WORKFLOW.md`
+- keep this file only as a reference while the single-lane lifecycle-owner model settles
+You are the legacy DayFlow review runner for a Linear issue that is already in `In Review`.
 
 Repository context:
 

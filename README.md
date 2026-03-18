@@ -102,7 +102,6 @@ Use the wrapper below instead of launching Symphony directly. It keeps Linear st
 LINEAR_API_KEY=... scripts/run_symphony.sh
 ```
 
-Dashboards:
+Dashboard:
 
-- implementation lane: `http://127.0.0.1:4100/`
-- review lane: `http://127.0.0.1:4101/`
+- lifecycle-owner lane: `http://127.0.0.1:4100/`

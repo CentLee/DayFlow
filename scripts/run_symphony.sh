@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT_DIR="/Users/kakao_ent/Documents/DayFlow"
 SYMPHONY_DIR="$ROOT_DIR/vendor/symphony/elixir"
 IMPLEMENTATION_WORKFLOW_FILE="$ROOT_DIR/WORKFLOW.md"
-REVIEW_WORKFLOW_FILE="$ROOT_DIR/WORKFLOW.review.md"
 SYNC_SCRIPT="$ROOT_DIR/scripts/sync_linear_pr_states.sh"
 REVIEW_FEEDBACK_SCRIPT="$ROOT_DIR/scripts/reconcile_review_feedback.sh"
 PROOF_UPDATE_SCRIPT="$ROOT_DIR/scripts/update_pr_proof.sh"
@@ -33,9 +32,6 @@ cleanup() {
   if [[ -n "${IMPLEMENTATION_SYMPHONY_PID:-}" ]]; then
     kill "$IMPLEMENTATION_SYMPHONY_PID" >/dev/null 2>&1 || true
   fi
-  if [[ -n "${REVIEW_SYMPHONY_PID:-}" ]]; then
-    kill "$REVIEW_SYMPHONY_PID" >/dev/null 2>&1 || true
-  fi
 }
 
 trap cleanup EXIT INT TERM
@@ -47,8 +43,4 @@ SYNC_LOOP_PID=$!
 cd "$SYMPHONY_DIR"
 /opt/homebrew/bin/mise exec -- ./bin/symphony "$IMPLEMENTATION_WORKFLOW_FILE" --i-understand-that-this-will-be-running-without-the-usual-guardrails &
 IMPLEMENTATION_SYMPHONY_PID=$!
-
-/opt/homebrew/bin/mise exec -- ./bin/symphony "$REVIEW_WORKFLOW_FILE" --i-understand-that-this-will-be-running-without-the-usual-guardrails &
-REVIEW_SYMPHONY_PID=$!
-
-wait "$IMPLEMENTATION_SYMPHONY_PID" "$REVIEW_SYMPHONY_PID"
+wait "$IMPLEMENTATION_SYMPHONY_PID"

@@ -17,7 +17,8 @@ This repository is designed for Codex-based agent execution.
 3. Product Agent writes or updates product-facing specs from user needs and the Excel-derived budget model.
 4. Backend, iOS, and Integration Agents implement against agreed contracts, usually as single-agent issues.
 5. Small vertical slices may use sequential handoff across agents when the contract is already stable.
-6. Review Agent validates every PR for simplicity, API consistency, privacy boundaries, and test coverage.
+6. The primary agent owns an issue through review follow-up until the PR is merge-ready.
+7. Review Agent validates every PR for simplicity, API consistency, privacy boundaries, and test coverage, but does not replace lifecycle ownership.
 
 ## Constraints
 
