@@ -96,13 +96,40 @@ Notes:
 
 - auth responses stay minimal for MVP and do not inline calendar or budget payloads
 - `/me` is the bootstrap source for session user data and current month routing
-- current memory mocks return the owner view above; invited-user shared calendar grouping is still documented separately in the domain model
+- current memory mocks return the owner view above for the seeded owner account
+
+Invited collaborator example:
+
+```json
+{
+  "user": {
+    "id": "usr_005",
+    "email": "user@example.com",
+    "display_name": "Kakao"
+  },
+  "owned_calendars": [],
+  "shared_calendars": [
+    {
+      "id": "cal_002",
+      "name": "Shared Home",
+      "color": "#D8A21D",
+      "updated_at": "2026-03-17T00:00:00Z"
+    }
+  ],
+  "current_budget_month_key": "2026-03"
+}
+```
+
+Notes:
+
+- invited collaborators move shared calendars into `shared_calendars` and do not receive budget data
+- the collaborator example is the intended grouped shape for session bootstrap after invite registration/login
 
 ## Calendars
 
 ### `GET /calendars`
 
-Returns calendars visible to the user.
+Returns the current flat calendar list from the backend memory mock.
 
 Response:
 
@@ -114,12 +141,6 @@ Response:
       "name": "Personal",
       "color": "#1F6B5C",
       "updated_at": "2026-03-17T00:00:00Z"
-    },
-    {
-      "id": "cal_002",
-      "name": "Shared Home",
-      "color": "#D8A21D",
-      "updated_at": "2026-03-17T00:00:00Z"
     }
   ]
 }
@@ -127,7 +148,8 @@ Response:
 
 Notes:
 
-- the same minimal calendar summary shape is reused in `/me` and `/calendars`
+- the seeded owner mock currently returns only `owned_calendars` here
+- shared calendars for collaborators are documented in `/me` above and remain a follow-up for the flat `/calendars` mock
 - the list stays budget-free even when a calendar is shared
 
 ### `POST /calendars`
