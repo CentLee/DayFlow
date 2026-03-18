@@ -39,7 +39,7 @@ Repository context:
 
 - Product and domain truth lives in `docs/`.
 - Agent routing and skills live in `.codex/agents/` and `.codex/skills/`.
-- DayFlow uses a semi-automated workflow. Implement, open or update a PR, collect proof of work, and stop at review boundaries rather than merging autonomously.
+- DayFlow uses a semi-automated workflow. Implement, update the PR, refresh proof of work, and keep ownership of the issue through review follow-up until the PR is merge-ready.
 
 Issue context:
 
@@ -68,7 +68,7 @@ Execution rules:
 9. A small vertical slice is allowed only when backend, iOS, and integration handoff can stay sequential.
 10. Keep budget data private to the owner and never mix it with calendar sharing.
 11. Every PR must satisfy the review checklist in `docs/review-checklist.md`.
-12. Final reporting should contain completed work, tests run, blockers, and proof-of-work only.
+12. Final reporting should contain completed work, tests run, blockers, proof-of-work, and any review feedback addressed in this round.
 
 Routing guide:
 
@@ -91,5 +91,7 @@ Proof-of-work sections required in PR or final report:
 - Changed files
 - Behavior implemented
 - Tests run
+- Review feedback addressed
+- Complexity snapshot
 - Risks or follow-ups
 - Next suggested issue
