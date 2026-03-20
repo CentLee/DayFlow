@@ -11,6 +11,7 @@ PROOF_UPDATE_SCRIPT="$ROOT_DIR/scripts/update_pr_proof.sh"
 SESSION_GUARD_SCRIPT="$ROOT_DIR/scripts/guard_issue_sessions.sh"
 OUTCOME_VALIDATOR_SCRIPT="$ROOT_DIR/scripts/validate_issue_outcomes.sh"
 EMPTY_SPIN_GUARD_SCRIPT="$ROOT_DIR/scripts/guard_empty_workspace_spins.sh"
+BRANCH_BOOTSTRAP_GUARD_SCRIPT="$ROOT_DIR/scripts/guard_branch_bootstrap_stalls.sh"
 SYNC_INTERVAL_SECONDS="${SYNC_INTERVAL_SECONDS:-20}"
 
 if [[ -z "${LINEAR_API_KEY:-}" ]]; then
@@ -56,6 +57,14 @@ sync_loop() {
       fi
       break
     fi
+    guard_output=$("$BRANCH_BOOTSTRAP_GUARD_SCRIPT" || true)
+    if [[ -n "$guard_output" ]]; then
+      printf '%s\n' "$guard_output"
+      if [[ -n "${IMPLEMENTATION_SYMPHONY_PID:-}" ]]; then
+        kill "$IMPLEMENTATION_SYMPHONY_PID" >/dev/null 2>&1 || true
+      fi
+      break
+    fi
     sleep "$SYNC_INTERVAL_SECONDS"
   done
 }
@@ -79,6 +88,7 @@ while true; do
   "$OUTCOME_VALIDATOR_SCRIPT" || true
   "$SESSION_GUARD_SCRIPT" || true
   "$EMPTY_SPIN_GUARD_SCRIPT" || true
+  "$BRANCH_BOOTSTRAP_GUARD_SCRIPT" || true
 
   sync_loop &
   SYNC_LOOP_PID=$!
@@ -101,5 +111,6 @@ while true; do
   "$OUTCOME_VALIDATOR_SCRIPT" || true
   "$SESSION_GUARD_SCRIPT" || true
   "$EMPTY_SPIN_GUARD_SCRIPT" || true
+  "$BRANCH_BOOTSTRAP_GUARD_SCRIPT" || true
   sleep 2
 done
