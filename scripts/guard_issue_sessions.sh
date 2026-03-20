@@ -58,6 +58,13 @@ find_issue_state_name() {
   jq -r --arg identifier "$identifier" '.[] | select(.identifier == $identifier) | .state.name' <<<"$issue_table_json"
 }
 
+has_open_pr() {
+  local branch="$1"
+  GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" \
+    gh pr list --state open --limit 100 --json headRefName |
+    jq -e --arg branch "$branch" '.[] | select(.headRefName == $branch)' >/dev/null
+}
+
 minutes_since_change() {
   local path="$1"
   local now modified
@@ -112,6 +119,11 @@ should_reset_issue() {
 
   if (( dirty_minutes >= MAX_UNTRACKED_MINUTES )) && [[ "$branch" =~ ^codex/${issue_key}- ]] && [[ -n "$(git -C "$workspace_dir" status --porcelain 2>/dev/null)" ]] && ! git -C "$workspace_dir" diff --quiet -- apps/ios/DayFlow.xcodeproj 2>/dev/null; then
     echo "workspace stalled with generated file churn"
+    return 0
+  fi
+
+  if (( dirty_minutes >= MAX_UNTRACKED_MINUTES )) && [[ "$branch" =~ ^codex/${issue_key}- ]] && [[ -n "$(git -C "$workspace_dir" status --porcelain 2>/dev/null)" ]] && ! has_open_pr "$branch"; then
+    echo "workspace stalled with uncommitted changes and no PR"
     return 0
   fi
 
