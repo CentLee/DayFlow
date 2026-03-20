@@ -230,15 +230,20 @@ private extension BudgetBoardResponse {
                 remainingBudgetAmount: 145,
                 updatedAt: "2026-03-17T00:00:00Z"
             ),
-            summary: BudgetSummary(fixedCostTotal: 153, variableBucketTotal: 12, freeCashAmount: 118),
+            summary: BudgetSummary(fixedCostTotal: 153, variableBucketTotal: 12, freeCashAmount: -35),
             fixedItems: [
-                BudgetItem(id: "itm_001", name: "월세 및 관리비", kind: "fixed", amount: 21, enabled: true, note: nil, billingDayLabel: "20일", updatedAt: "2026-03-17T00:00:00Z")
+                BudgetItem(id: "bitm_001", name: "월세 및 관리비", kind: "fixed", amount: 21, enabled: true, note: nil, billingDayLabel: "20일", updatedAt: "2026-03-17T00:00:00Z"),
+                BudgetItem(id: "bitm_002", name: "대출이자", kind: "fixed", amount: 36, enabled: true, note: nil, billingDayLabel: "5일", updatedAt: "2026-03-17T00:00:00Z"),
+                BudgetItem(id: "bitm_003", name: "핸드폰요금", kind: "fixed", amount: 8, enabled: true, note: nil, billingDayLabel: "15일", updatedAt: "2026-03-17T00:00:00Z"),
+                BudgetItem(id: "bitm_004", name: "신용카드", kind: "fixed", amount: 88, enabled: true, note: nil, billingDayLabel: "26일", updatedAt: "2026-03-17T00:00:00Z")
             ],
             variableBuckets: [
-                BudgetBucket(id: "bkt_001", name: "점심 및 주말 식대", plannedAmount: 12, actualAmount: 0, formulaHint: "평일 1 + 주말 3", updatedAt: "2026-03-17T00:00:00Z")
+                BudgetBucket(id: "bkt_001", name: "점심 및 주말 식대", plannedAmount: 12, actualAmount: 0, formulaHint: "평일 1 + 주말 3", updatedAt: "2026-03-17T00:00:00Z"),
+                BudgetBucket(id: "bkt_002", name: "유동 금액", plannedAmount: 0, actualAmount: 0, formulaHint: nil, updatedAt: "2026-03-17T00:00:00Z")
             ],
             billingReminders: [
-                BudgetItem(id: "rem_001", name: "보험비 정산", kind: "reminder", amount: 0, enabled: true, note: nil, billingDayLabel: "25일", updatedAt: "2026-03-17T00:00:00Z")
+                BudgetItem(id: "rem_001", name: "인터넷", kind: "reminder", amount: 0, enabled: false, note: nil, billingDayLabel: "25일", updatedAt: "2026-03-17T00:00:00Z"),
+                BudgetItem(id: "rem_002", name: "전기 정산", kind: "reminder", amount: 0, enabled: false, note: nil, billingDayLabel: "월말일", updatedAt: "2026-03-17T00:00:00Z")
             ]
         )
     }
