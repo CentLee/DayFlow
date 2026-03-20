@@ -17,6 +17,28 @@ func TestInitSchemaDefinesBaseUserAuthColumns(t *testing.T) {
 	)
 }
 
+func TestInitSchemaDefinesBudgetStorageTables(t *testing.T) {
+	contents := mustReadMigration(t, "0001_init.sql")
+	requireContainsAll(t, contents,
+		"CREATE TABLE expense_books (",
+		"owner_user_id TEXT NOT NULL UNIQUE REFERENCES users(id)",
+		"CREATE TABLE budget_months (",
+		"expense_book_id TEXT NOT NULL REFERENCES expense_books(id) ON DELETE CASCADE",
+		"month_key TEXT NOT NULL",
+		"remaining_budget_amount INTEGER NOT NULL DEFAULT 0",
+		"UNIQUE (expense_book_id, month_key)",
+		"CREATE TABLE budget_item_entries (",
+		"budget_month_id TEXT NOT NULL REFERENCES budget_months(id) ON DELETE CASCADE",
+		"billing_day_label TEXT NOT NULL DEFAULT ''",
+		"CREATE TABLE budget_buckets (",
+		"planned_amount INTEGER NOT NULL DEFAULT 0",
+		"actual_amount INTEGER NOT NULL DEFAULT 0",
+		"CREATE TABLE billing_reminders (",
+		"budget_item_entry_id TEXT REFERENCES budget_item_entries(id) ON DELETE SET NULL",
+		"due_day_label TEXT NOT NULL",
+	)
+}
+
 func TestAuthSchemaDefinesCalendarInvites(t *testing.T) {
 	contents := mustReadMigration(t, "0002_auth_schema.sql")
 	requireContainsAll(t, contents,
@@ -62,6 +84,18 @@ func TestCalendarEventFoundationSchemaAddsIndexesAndConstraints(t *testing.T) {
 		"CHECK (role IN ('owner', 'editor', 'viewer'))",
 		"ADD CONSTRAINT events_time_range_check",
 		"CHECK (ends_at >= starts_at);",
+	)
+}
+
+func TestBudgetStorageSchemaAddsReminderTimestampsAndIndexes(t *testing.T) {
+	contents := mustReadMigration(t, "0004_budget_storage.sql")
+	requireContainsAll(t, contents,
+		"ALTER TABLE billing_reminders",
+		"ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();",
+		"CREATE INDEX idx_budget_months_expense_book_month_key ON budget_months(expense_book_id, month_key);",
+		"CREATE INDEX idx_budget_item_entries_budget_month_id_sort_order ON budget_item_entries(budget_month_id, sort_order);",
+		"CREATE INDEX idx_budget_buckets_budget_month_id ON budget_buckets(budget_month_id);",
+		"CREATE INDEX idx_billing_reminders_budget_month_id ON billing_reminders(budget_month_id);",
 	)
 }
 
