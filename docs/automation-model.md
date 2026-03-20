@@ -203,6 +203,7 @@ Move an issue to `Blocked` when:
 - `WORKFLOW.md`
 - `docs/automation-model.md`
 - `docs/pain-points.md`
+- `docs/failure-taxonomy.md`
 - `docs/harness-skill-model.md`
 - `docs/iteration-queue.md`
 - `docs/review-checklist.md`

@@ -6,8 +6,6 @@ WORKSPACE_ROOT="$ROOT_DIR/.symphony/workspaces"
 MAX_SESSION_MINUTES="${MAX_SESSION_MINUTES:-15}"
 MAX_UNTRACKED_MINUTES="${MAX_UNTRACKED_MINUTES:-8}"
 MAX_TOKEN_TOTAL="${MAX_TOKEN_TOTAL:-120000}"
-STATE_IN_PROGRESS_ID="b88769c5-551d-4248-b834-c2e3975ef7df"
-
 if [[ -z "${LINEAR_API_KEY:-}" ]]; then
   echo "LINEAR_API_KEY is required" >&2
   exit 1
@@ -142,9 +140,6 @@ for workspace_dir in "$WORKSPACE_ROOT"/CEN-*; do
   fi
 
   if reason=$(should_reset_issue "$workspace_dir" "$issue_key"); then
-    if [[ "$current_state" != "In Progress" ]]; then
-      linear_mutation "$issue_id" "$STATE_IN_PROGRESS_ID"
-    fi
     echo "guard flagged ${issue_key}: ${reason}"
   fi
 done
