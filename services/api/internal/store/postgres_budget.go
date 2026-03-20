@@ -26,6 +26,59 @@ func NewPostgresBudgetStore(db *sql.DB) *PostgresBudgetStore {
 	}
 }
 
+func (s *PostgresBudgetStore) LoadBudgetTemplates(ctx context.Context, ownerUserID string) (domain.BudgetTemplates, error) {
+	templates, err := s.loadBudgetTemplates(ctx, ownerUserID)
+	if err != nil {
+		return domain.BudgetTemplates{}, err
+	}
+	return domain.BudgetTemplates{FixedItems: templates}, nil
+}
+
+func (s *PostgresBudgetStore) SaveBudgetTemplates(ctx context.Context, ownerUserID string, templates domain.BudgetTemplates) (domain.BudgetTemplates, error) {
+	now := s.now()
+	stored := cloneBudgetTemplates(templates)
+	for index := range stored.FixedItems {
+		item := &stored.FixedItems[index]
+		if item.Name == "" {
+			return domain.BudgetTemplates{}, fmt.Errorf("template name is required: %w", ErrInvalidInput)
+		}
+		if item.Kind == "" {
+			item.Kind = "fixed"
+		}
+		if item.Kind != "fixed" {
+			return domain.BudgetTemplates{}, fmt.Errorf("template kind must be fixed: %w", ErrInvalidInput)
+		}
+		if item.ID == "" {
+			item.ID = s.newID("tmpl")
+		}
+		item.SortOrder = index
+		item.UpdatedAt = now.Format(time.RFC3339)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.BudgetTemplates{}, fmt.Errorf("begin budget template transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	expenseBookID, err := s.ensureExpenseBook(ctx, tx, ownerUserID, now)
+	if err != nil {
+		return domain.BudgetTemplates{}, err
+	}
+	if err = s.replaceBudgetTemplates(ctx, tx, expenseBookID, &stored, now); err != nil {
+		return domain.BudgetTemplates{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return domain.BudgetTemplates{}, fmt.Errorf("commit budget template transaction: %w", err)
+	}
+
+	return stored, nil
+}
+
 func (s *PostgresBudgetStore) LoadBudgetBoard(ctx context.Context, ownerUserID, monthKey string) (domain.BudgetBoard, error) {
 	month, err := s.loadBudgetMonth(ctx, ownerUserID, monthKey)
 	if err != nil {
@@ -135,6 +188,36 @@ WHERE eb.owner_user_id = $1 AND bm.month_key = $2`
 	}
 	month.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
 	return month, nil
+}
+
+func (s *PostgresBudgetStore) loadBudgetTemplates(ctx context.Context, ownerUserID string) ([]domain.BudgetTemplate, error) {
+	const query = `
+SELECT bit.id, bit.name, bit.kind, bit.default_amount, bit.default_enabled, bit.default_note, bit.default_billing_day, bit.sort_order, bit.updated_at
+FROM budget_item_templates bit
+JOIN expense_books eb ON eb.id = bit.expense_book_id
+WHERE eb.owner_user_id = $1
+ORDER BY bit.sort_order ASC, bit.id ASC`
+
+	rows, err := s.db.QueryContext(ctx, query, ownerUserID)
+	if err != nil {
+		return nil, fmt.Errorf("load budget templates: %w", err)
+	}
+	defer rows.Close()
+
+	templates := make([]domain.BudgetTemplate, 0)
+	for rows.Next() {
+		var item domain.BudgetTemplate
+		var updatedAt time.Time
+		if err := rows.Scan(&item.ID, &item.Name, &item.Kind, &item.DefaultAmount, &item.DefaultEnabled, &item.DefaultNote, &item.DefaultBillingDay, &item.SortOrder, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan budget template: %w", err)
+		}
+		item.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+		templates = append(templates, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate budget templates: %w", err)
+	}
+	return templates, nil
 }
 
 func (s *PostgresBudgetStore) loadBudgetItems(ctx context.Context, budgetMonthID string) ([]domain.BudgetItem, error) {
@@ -386,6 +469,42 @@ VALUES ($1, $2, NULL, $3, $4, $5, $6)`
 			now,
 		); err != nil {
 			return fmt.Errorf("insert billing reminder: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (s *PostgresBudgetStore) replaceBudgetTemplates(ctx context.Context, tx *sql.Tx, expenseBookID string, templates *domain.BudgetTemplates, now time.Time) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM budget_item_templates WHERE expense_book_id = $1`, expenseBookID); err != nil {
+		return fmt.Errorf("reset budget templates: %w", err)
+	}
+
+	const insertTemplateQuery = `
+INSERT INTO budget_item_templates (
+    id, expense_book_id, name, kind, default_amount, default_enabled,
+    default_note, default_billing_day, sort_order, updated_at
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+	for index, item := range templates.FixedItems {
+		templateID := item.ID
+		if templateID == "" {
+			templateID = s.newID("tmpl")
+		}
+		templates.FixedItems[index].ID = templateID
+		if _, err := tx.ExecContext(ctx, insertTemplateQuery,
+			templateID,
+			expenseBookID,
+			item.Name,
+			item.Kind,
+			item.DefaultAmount,
+			item.DefaultEnabled,
+			item.DefaultNote,
+			item.DefaultBillingDay,
+			index,
+			now,
+		); err != nil {
+			return fmt.Errorf("insert budget template: %w", err)
 		}
 	}
 

@@ -303,7 +303,38 @@ Current MVP contract rules:
 
 ### `GET /budget/templates`
 
+Returns the owner-scoped fixed-item template defaults used to seed future month boards.
+
+Response shape:
+
+```json
+{
+  "fixed_items": [
+    {
+      "id": "tmpl_123",
+      "name": "월세 및 관리비",
+      "kind": "fixed",
+      "default_amount": 21,
+      "default_enabled": true,
+      "default_note": "",
+      "default_billing_day": "20일",
+      "sort_order": 0,
+      "updated_at": "2026-03-17T00:00:00Z"
+    }
+  ]
+}
+```
+
 ### `PUT /budget/templates`
+
+Replaces the owner-scoped fixed-item template list for MVP.
+
+Current MVP contract rules:
+
+- the request is a full template-set write for simplicity
+- only owner-scoped fixed-item templates are editable in this endpoint
+- future unsaved month boards use the updated defaults
+- existing month snapshots do not change when template defaults change
 
 ## Error Model
 

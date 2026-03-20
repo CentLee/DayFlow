@@ -27,6 +27,7 @@ func NewRouter(store *store.MemoryStore) http.Handler {
 	mux.HandleFunc("/v1/calendars", r.handleCalendars)
 	mux.HandleFunc("/v1/calendars/", r.handleCalendarSubroutes)
 	mux.HandleFunc("/v1/events/", r.handleEvents)
+	mux.HandleFunc("/v1/budget/templates", r.handleBudgetTemplates)
 	mux.HandleFunc("/v1/budget/months/", r.handleBudgetMonth)
 	return mux
 }
@@ -286,6 +287,37 @@ func (r *Router) handleBudgetMonth(w http.ResponseWriter, req *http.Request) {
 		}
 		board.Month.MonthKey = monthKey
 		saved, err := r.store.SaveBudgetBoard(userID, board)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, saved)
+	default:
+		writeMethodNotAllowed(w)
+	}
+}
+
+func (r *Router) handleBudgetTemplates(w http.ResponseWriter, req *http.Request) {
+	userID, ok := r.currentUserID(w, req)
+	if !ok {
+		return
+	}
+
+	switch req.Method {
+	case http.MethodGet:
+		templates, err := r.store.LoadBudgetTemplates(userID)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, templates)
+	case http.MethodPut:
+		var templates domain.BudgetTemplates
+		if err := decodeJSON(req, &templates); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		saved, err := r.store.SaveBudgetTemplates(userID, templates)
 		if err != nil {
 			writeStoreError(w, err)
 			return
