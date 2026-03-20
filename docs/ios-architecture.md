@@ -47,6 +47,14 @@ Use SwiftUI Observation for state updates and async/await for network calls.
 - fixed items favor toggles and inline numeric editing
 - variable items favor small bucket cards
 - billing reminders appear near the bottom as planning context
+- template editing owns recurring structure such as defaults and ordering
+
+## Budget Board Interaction Boundaries
+
+- fixed-item interactions focus on toggles, amount edits, and notes for the current month snapshot
+- variable-bucket interactions focus on planned and actual amount edits rather than transaction entry
+- reminder interactions focus on label, due-day, and note metadata only
+- reminder edits do not imply local notification scheduling or calendar event creation in MVP
 
 ## Networking
 

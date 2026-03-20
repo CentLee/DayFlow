@@ -70,6 +70,56 @@ These insights shape the MVP:
 - billing reminder metadata
 - notes per item
 
+## Monthly Budget Board Rules
+
+### Current MVP Board Scope
+
+- the month board is the main editing surface for one `YYYY-MM` snapshot
+- board edits are private to the owner and never inherit calendar sharing permissions
+- board edits update the visible KPI summary immediately
+- KPI cards are display-only derived views and never accept direct user overrides on the board
+- template management stays separate from month-board value editing
+
+### Fixed Item Rules
+
+- fixed items appear on the board as month-scoped copies of the user template
+- the board supports fast edits to `enabled`, `amount`, and item notes for the current month
+- fixed-item names, default values, and ordering are managed in template editing, not inline on the month board
+- the board does not support inline add, delete, rename, or reorder actions for fixed items in MVP
+- editing a fixed item changes only the current month snapshot and does not rewrite other months or template defaults
+
+### Variable Bucket Rules
+
+- variable buckets stay bucket-based rather than becoming transaction rows
+- the board supports inline edits to planned and actual amounts for the current month
+- planned amounts affect remaining budget immediately
+- actual amounts affect free cash calculations immediately
+- bucket structure and defaults stay template-driven for MVP, rather than open-ended inline board customization
+- bucket names, ordering, and formula hints stay outside inline month-board editing
+
+### Billing Reminder Rules
+
+- reminders are planning metadata attached to budget items, not standalone schedule objects
+- the board supports editing reminder label, due-day label, and note text for the current month
+- reminders stay informational in MVP and do not create calendar events, notifications, or KPI changes
+- the board does not create, detach, or automate reminders beyond editing attached metadata for the current month
+- reminder edits are saved with the month board and remain private to the budget owner
+
+### Current KPI Truth
+
+- `current money` maps to `current_cash_amount` and is a manual month value
+- `monthly budget` maps to `base_budget_amount`
+- `fixed costs` is the sum of enabled fixed-item amounts
+- `savings` maps to `saving_amount`
+- `remaining budget` is `base_budget_amount - fixed_cost_total - saving_amount - variable_bucket_total + carry_over_amount`
+- `free cash` remains a supporting derived value: `current_cash_amount - enabled fixed item amounts - variable bucket actual amounts`
+
+### Follow-up Notes
+
+- future work may allow richer inline structure edits such as add, delete, rename, and reorder directly on the board
+- future work may separate reminder automation from reminder metadata, including calendar or notification hooks
+- future work may add transaction drill-down or formula-driven bucket behavior, but that is not part of the MVP board contract
+
 ### Authentication
 
 - invited account registration
@@ -91,4 +141,3 @@ These insights shape the MVP:
 - fixed-cost toggles and amount edits update KPI totals correctly
 - invited users can access only shared calendars
 - budget data remains private per user
-
