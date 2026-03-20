@@ -261,11 +261,36 @@ func (r *Router) handleEvents(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) handleBudgetMonth(w http.ResponseWriter, req *http.Request) {
 	monthKey := strings.TrimPrefix(req.URL.Path, "/v1/budget/months/")
+	if !validMonthKey(monthKey) {
+		writeBadRequest(w, "month key must be yyyy-mm")
+		return
+	}
+	userID, ok := r.currentUserID(w, req)
+	if !ok {
+		return
+	}
+
 	switch req.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, r.store.BudgetBoard(monthKey))
+		board, err := r.store.LoadBudgetBoard(userID, monthKey)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, board)
 	case http.MethodPut:
-		writeJSON(w, http.StatusOK, map[string]string{"status": "not_implemented", "month_key": monthKey})
+		var board domain.BudgetBoard
+		if err := decodeJSON(req, &board); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		board.Month.MonthKey = monthKey
+		saved, err := r.store.SaveBudgetBoard(userID, board)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, saved)
 	default:
 		writeMethodNotAllowed(w)
 	}
@@ -404,7 +429,7 @@ func parseEventRange(req *http.Request) (*time.Time, *time.Time, error) {
 func writeStoreError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrForbidden):
-		writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]string{"code": "forbidden", "message": "calendar access denied"}})
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]string{"code": "forbidden", "message": "access denied"}})
 	case errors.Is(err, store.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"code": "not_found", "message": "resource not found"}})
 	case errors.Is(err, store.ErrInvalidInput):
@@ -430,4 +455,12 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func validMonthKey(monthKey string) bool {
+	parsed, err := time.Parse("2006-01", monthKey)
+	if err != nil {
+		return false
+	}
+	return parsed.UTC().Format("2006-01") == monthKey
 }

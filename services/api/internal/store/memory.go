@@ -92,9 +92,11 @@ type MemoryStore struct {
 	calendars       map[string]calendarRecord
 	calendarMembers map[string]map[string]string
 	events          map[string]eventRecord
+	budgetBoards    map[string]map[string]domain.BudgetBoard
 	counter         int
 	nextCalendarSeq int
 	nextEventSeq    int
+	nextBudgetSeq   int
 	monthKey        string
 	ownerID         string
 	now             func() time.Time
@@ -113,9 +115,11 @@ func NewMemoryStore() *MemoryStore {
 		calendars:       make(map[string]calendarRecord),
 		calendarMembers: make(map[string]map[string]string),
 		events:          make(map[string]eventRecord),
+		budgetBoards:    make(map[string]map[string]domain.BudgetBoard),
 		counter:         4,
 		nextCalendarSeq: 3,
 		nextEventSeq:    3,
+		nextBudgetSeq:   1,
 		monthKey:        monthKey,
 		ownerID:         "usr_001",
 		now:             nowFunc,
@@ -528,7 +532,84 @@ func (s *MemoryStore) DeleteEvent(userID, eventID string) error {
 }
 
 func (s *MemoryStore) BudgetBoard(monthKey string) domain.BudgetBoard {
-	now := time.Now().UTC().Format(time.RFC3339)
+	board, err := s.LoadBudgetBoard(s.ownerID, monthKey)
+	if err != nil {
+		return domain.BudgetBoard{}
+	}
+	return board
+}
+
+func (s *MemoryStore) LoadBudgetBoard(userID, monthKey string) (domain.BudgetBoard, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.userByIDLocked(userID); !ok {
+		return domain.BudgetBoard{}, ErrForbidden
+	}
+	if boards, ok := s.budgetBoards[userID]; ok {
+		if board, ok := boards[monthKey]; ok {
+			return cloneBudgetBoard(board), nil
+		}
+	}
+
+	board := s.defaultBudgetBoardLocked(monthKey)
+	if _, ok := s.budgetBoards[userID]; !ok {
+		s.budgetBoards[userID] = make(map[string]domain.BudgetBoard)
+	}
+	s.budgetBoards[userID][monthKey] = board
+	return cloneBudgetBoard(board), nil
+}
+
+func (s *MemoryStore) SaveBudgetBoard(userID string, board domain.BudgetBoard) (domain.BudgetBoard, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.userByIDLocked(userID); !ok {
+		return domain.BudgetBoard{}, ErrForbidden
+	}
+	if strings.TrimSpace(board.Month.MonthKey) == "" {
+		return domain.BudgetBoard{}, fmt.Errorf("budget month key is required: %w", ErrInvalidInput)
+	}
+
+	now := s.now().Format(time.RFC3339)
+	stored := cloneBudgetBoard(board)
+	if stored.Month.ID == "" {
+		stored.Month.ID = s.nextBudgetIDLocked("bmon")
+	}
+	stored.Month.UpdatedAt = now
+
+	for index := range stored.FixedItems {
+		if stored.FixedItems[index].ID == "" {
+			stored.FixedItems[index].ID = s.nextBudgetIDLocked("bitm")
+		}
+		stored.FixedItems[index].UpdatedAt = now
+	}
+	for index := range stored.VariableBuckets {
+		if stored.VariableBuckets[index].ID == "" {
+			stored.VariableBuckets[index].ID = s.nextBudgetIDLocked("bbkt")
+		}
+		stored.VariableBuckets[index].UpdatedAt = now
+	}
+	for index := range stored.BillingReminders {
+		if stored.BillingReminders[index].ID == "" {
+			stored.BillingReminders[index].ID = s.nextBudgetIDLocked("brem")
+		}
+		if stored.BillingReminders[index].Kind == "" {
+			stored.BillingReminders[index].Kind = "reminder"
+		}
+		stored.BillingReminders[index].UpdatedAt = now
+	}
+
+	stored.Summary, stored.Month.RemainingBudgetAmount = deriveBudgetSummary(stored.Month, stored.FixedItems, stored.VariableBuckets)
+	if _, ok := s.budgetBoards[userID]; !ok {
+		s.budgetBoards[userID] = make(map[string]domain.BudgetBoard)
+	}
+	s.budgetBoards[userID][stored.Month.MonthKey] = stored
+	return cloneBudgetBoard(stored), nil
+}
+
+func (s *MemoryStore) defaultBudgetBoardLocked(monthKey string) domain.BudgetBoard {
+	now := s.now().Format(time.RFC3339)
 	fixed := []domain.BudgetItem{
 		{ID: "itm_001", Name: "월세 및 관리비", Kind: "fixed", Amount: 21, Enabled: true, BillingDayLabel: "20일", UpdatedAt: now},
 		{ID: "itm_002", Name: "대출이자", Kind: "fixed", Amount: 36, Enabled: true, BillingDayLabel: "5일", UpdatedAt: now},
@@ -539,21 +620,15 @@ func (s *MemoryStore) BudgetBoard(monthKey string) domain.BudgetBoard {
 		{ID: "bkt_001", Name: "점심 및 주말 식대", PlannedAmount: 12, ActualAmount: 0, FormulaHint: "평일 1 + 주말 3", UpdatedAt: now},
 		{ID: "bkt_002", Name: "유동 금액", PlannedAmount: 0, ActualAmount: 0, UpdatedAt: now},
 	}
-	return domain.BudgetBoard{
+	board := domain.BudgetBoard{
 		Month: domain.BudgetMonth{
-			ID:                    "bmon_001",
-			MonthKey:              monthKey,
-			BaseBudgetAmount:      510,
-			CurrentCashAmount:     118,
-			SavingAmount:          200,
-			CarryOverAmount:       0,
-			RemainingBudgetAmount: 145,
-			UpdatedAt:             now,
-		},
-		Summary: domain.BudgetSummary{
-			FixedCostTotal:      153,
-			VariableBucketTotal: 12,
-			FreeCashAmount:      118,
+			ID:                "bmon_001",
+			MonthKey:          monthKey,
+			BaseBudgetAmount:  510,
+			CurrentCashAmount: 118,
+			SavingAmount:      200,
+			CarryOverAmount:   0,
+			UpdatedAt:         now,
 		},
 		FixedItems:      fixed,
 		VariableBuckets: buckets,
@@ -562,6 +637,8 @@ func (s *MemoryStore) BudgetBoard(monthKey string) domain.BudgetBoard {
 			{ID: "rem_002", Name: "전기 정산", Kind: "reminder", BillingDayLabel: "월말일", UpdatedAt: now},
 		},
 	}
+	board.Summary, board.Month.RemainingBudgetAmount = deriveBudgetSummary(board.Month, board.FixedItems, board.VariableBuckets)
+	return board
 }
 
 func (s *MemoryStore) meForUserIDLocked(userID string) (domain.Me, bool) {
@@ -680,6 +757,23 @@ func canEditEvents(role string) bool {
 	return role == RoleOwner || role == RoleEditor
 }
 
+func cloneBudgetBoard(board domain.BudgetBoard) domain.BudgetBoard {
+	cloned := board
+	cloned.FixedItems = append([]domain.BudgetItem(nil), board.FixedItems...)
+	if cloned.FixedItems == nil {
+		cloned.FixedItems = []domain.BudgetItem{}
+	}
+	cloned.VariableBuckets = append([]domain.BudgetBucket(nil), board.VariableBuckets...)
+	if cloned.VariableBuckets == nil {
+		cloned.VariableBuckets = []domain.BudgetBucket{}
+	}
+	cloned.BillingReminders = append([]domain.BudgetItem(nil), board.BillingReminders...)
+	if cloned.BillingReminders == nil {
+		cloned.BillingReminders = []domain.BudgetItem{}
+	}
+	return cloned
+}
+
 func cloneCalendars(calendars []domain.Calendar) []domain.Calendar {
 	if len(calendars) == 0 {
 		return []domain.Calendar{}
@@ -707,4 +801,10 @@ func newToken() string {
 
 func normalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
+}
+
+func (s *MemoryStore) nextBudgetIDLocked(prefix string) string {
+	id := fmt.Sprintf("%s_%03d", prefix, s.nextBudgetSeq)
+	s.nextBudgetSeq++
+	return id
 }
