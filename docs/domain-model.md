@@ -137,6 +137,7 @@
 - `label`
 - `due_day_label`
 - `note`
+- `updated_at`
 
 ## Derived Summary Rules
 
@@ -144,6 +145,16 @@
 - `variable_bucket_total`: sum of planned variable buckets
 - `remaining_budget_amount`: `base_budget_amount - fixed_cost_total - saving_amount - variable_bucket_total + carry_over_amount`
 - `free_cash_amount`: `current_cash_amount - enabled fixed item amounts - variable bucket actual amounts`
+
+## Month Board Edit Boundaries
+
+- templates seed month entries and buckets, but month-board edits do not rewrite template defaults or prior months
+- `BudgetItemEntry` is the editable current-month snapshot for fixed-item values such as `enabled`, `amount`, and `note`
+- `BudgetBucket` is the editable current-month snapshot for `planned_amount` and `actual_amount`
+- names, sort order, and formula-style structure fields remain template-owned instead of month-board editable
+- `BillingReminder` stays attached to a month item as informational metadata and does not imply calendar event creation
+- KPI summary values are derived from the month snapshot and are not direct user-editable fields
+- the current product summary prioritizes `current_cash_amount`, `base_budget_amount`, `fixed_cost_total`, `saving_amount`, and `remaining_budget_amount`; `free_cash_amount` remains a supporting derived field
 
 ## Privacy Rules
 

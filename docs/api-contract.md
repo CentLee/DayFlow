@@ -293,6 +293,14 @@ Response shape:
 
 Upserts the month board. The client sends the full edited shape for simplicity.
 
+Current MVP contract rules:
+
+- the request is a current-month snapshot write, not a template update
+- clients should treat KPI summary values as derived from the submitted month data rather than as authoritative write inputs
+- `fixed_items` are month-entry values; clients may edit fields such as `enabled`, `amount`, and notes while preserving template-owned structure fields
+- `variable_buckets` are month-entry values; clients may edit planned and actual amounts while preserving template-owned structure fields
+- `billing_reminders` are informational metadata for budget planning and do not create calendar events or notifications
+
 ### `GET /budget/templates`
 
 ### `PUT /budget/templates`
