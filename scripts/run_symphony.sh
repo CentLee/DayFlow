@@ -85,6 +85,7 @@ while true; do
 
   /opt/homebrew/bin/mise exec -- ./bin/symphony "$IMPLEMENTATION_WORKFLOW_FILE" --i-understand-that-this-will-be-running-without-the-usual-guardrails &
   IMPLEMENTATION_SYMPHONY_PID=$!
+  export IMPLEMENTATION_SYMPHONY_PID
   wait "$IMPLEMENTATION_SYMPHONY_PID" || true
 
   if [[ -n "${SYNC_LOOP_PID:-}" ]]; then
@@ -94,6 +95,7 @@ while true; do
   fi
 
   IMPLEMENTATION_SYMPHONY_PID=""
+  export IMPLEMENTATION_SYMPHONY_PID
   "$OWNERSHIP_SCRIPT" || true
   "$SYNC_SCRIPT" || true
   "$OUTCOME_VALIDATOR_SCRIPT" || true

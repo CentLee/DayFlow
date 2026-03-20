@@ -24,12 +24,12 @@ linear_query() {
     --data "$(jq -n --arg query "$query" '{query: $query}')"
 }
 
-todo_count=$(
-  linear_query "query { project(id: \"${PROJECT_ID}\") { issues(first: 100, filter: { state: { name: { eq: \"Todo\" } } }) { nodes { id } } } }" |
-    jq '.data.project.issues.nodes | length'
+active_count=$(
+  linear_query "query { project(id: \"${PROJECT_ID}\") { issues(first: 100) { nodes { id identifier state { name } } } } }" |
+    jq '[.data.project.issues.nodes[] | select(.state.name == "Todo" or .state.name == "In Progress")] | length'
 )
 
-if (( todo_count == 0 )); then
+if (( active_count == 0 )); then
   exit 0
 fi
 
@@ -49,5 +49,5 @@ if [[ -z "$elapsed" ]]; then
 fi
 
 if (( elapsed >= MAX_EMPTY_SPIN_SECONDS )); then
-  echo "guard flagged empty workspace spin: ${todo_count} Todo issue(s), 0 workspaces, runtime ${elapsed}s"
+  echo "guard flagged empty workspace spin: ${active_count} active issue(s), 0 workspaces, runtime ${elapsed}s"
 fi
