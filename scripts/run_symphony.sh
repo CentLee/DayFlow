@@ -10,6 +10,7 @@ REVIEW_FEEDBACK_SCRIPT="$ROOT_DIR/scripts/reconcile_review_feedback.sh"
 PROOF_UPDATE_SCRIPT="$ROOT_DIR/scripts/update_pr_proof.sh"
 SESSION_GUARD_SCRIPT="$ROOT_DIR/scripts/guard_issue_sessions.sh"
 OUTCOME_VALIDATOR_SCRIPT="$ROOT_DIR/scripts/validate_issue_outcomes.sh"
+EMPTY_SPIN_GUARD_SCRIPT="$ROOT_DIR/scripts/guard_empty_workspace_spins.sh"
 SYNC_INTERVAL_SECONDS="${SYNC_INTERVAL_SECONDS:-20}"
 
 if [[ -z "${LINEAR_API_KEY:-}" ]]; then
@@ -25,7 +26,7 @@ preflight_cleanup() {
 
 sync_loop() {
   while true; do
-    local guard_output
+    local guard_output outcome_output
 
     "$OWNERSHIP_SCRIPT" || true
     "$SYNC_SCRIPT" || true
@@ -40,6 +41,14 @@ sync_loop() {
       break
     fi
     guard_output=$("$SESSION_GUARD_SCRIPT" || true)
+    if [[ -n "$guard_output" ]]; then
+      printf '%s\n' "$guard_output"
+      if [[ -n "${IMPLEMENTATION_SYMPHONY_PID:-}" ]]; then
+        kill "$IMPLEMENTATION_SYMPHONY_PID" >/dev/null 2>&1 || true
+      fi
+      break
+    fi
+    guard_output=$("$EMPTY_SPIN_GUARD_SCRIPT" || true)
     if [[ -n "$guard_output" ]]; then
       printf '%s\n' "$guard_output"
       if [[ -n "${IMPLEMENTATION_SYMPHONY_PID:-}" ]]; then
@@ -63,14 +72,32 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 preflight_cleanup
-"$OWNERSHIP_SCRIPT" || true
-"$SYNC_SCRIPT" || true
-"$OUTCOME_VALIDATOR_SCRIPT" || true
-"$SESSION_GUARD_SCRIPT" || true
-sync_loop &
-SYNC_LOOP_PID=$!
-
 cd "$SYMPHONY_DIR"
-/opt/homebrew/bin/mise exec -- ./bin/symphony "$IMPLEMENTATION_WORKFLOW_FILE" --i-understand-that-this-will-be-running-without-the-usual-guardrails &
-IMPLEMENTATION_SYMPHONY_PID=$!
-wait "$IMPLEMENTATION_SYMPHONY_PID"
+while true; do
+  "$OWNERSHIP_SCRIPT" || true
+  "$SYNC_SCRIPT" || true
+  "$OUTCOME_VALIDATOR_SCRIPT" || true
+  "$SESSION_GUARD_SCRIPT" || true
+  "$EMPTY_SPIN_GUARD_SCRIPT" || true
+
+  sync_loop &
+  SYNC_LOOP_PID=$!
+
+  /opt/homebrew/bin/mise exec -- ./bin/symphony "$IMPLEMENTATION_WORKFLOW_FILE" --i-understand-that-this-will-be-running-without-the-usual-guardrails &
+  IMPLEMENTATION_SYMPHONY_PID=$!
+  wait "$IMPLEMENTATION_SYMPHONY_PID" || true
+
+  if [[ -n "${SYNC_LOOP_PID:-}" ]]; then
+    kill "$SYNC_LOOP_PID" >/dev/null 2>&1 || true
+    wait "$SYNC_LOOP_PID" 2>/dev/null || true
+    SYNC_LOOP_PID=""
+  fi
+
+  IMPLEMENTATION_SYMPHONY_PID=""
+  "$OWNERSHIP_SCRIPT" || true
+  "$SYNC_SCRIPT" || true
+  "$OUTCOME_VALIDATOR_SCRIPT" || true
+  "$SESSION_GUARD_SCRIPT" || true
+  "$EMPTY_SPIN_GUARD_SCRIPT" || true
+  sleep 2
+done

@@ -5,6 +5,7 @@ ROOT_DIR="/Users/kakao_ent/Documents/DayFlow"
 WORKSPACE_ROOT="$ROOT_DIR/.symphony/workspaces"
 PROJECT_ID="fdeb5f63-05f2-4ab2-bb9d-a12dc0084b9f"
 VALIDATION_STALE_MINUTES="${VALIDATION_STALE_MINUTES:-5}"
+STATE_TODO_ID="452888e8-7d81-4229-bf16-d0876c3098a3"
 
 if [[ -z "${LINEAR_API_KEY:-}" ]]; then
   echo "LINEAR_API_KEY is required" >&2
@@ -29,10 +30,32 @@ linear_query() {
     --data "$(jq -n --arg query "$query" '{query: $query}')"
 }
 
+linear_mutation() {
+  local issue_id="$1"
+  local state_id="$2"
+  local query
+
+  query=$(cat <<EOF
+mutation {
+  issueUpdate(id: "${issue_id}", input: {stateId: "${state_id}"}) {
+    success
+  }
+}
+EOF
+)
+
+  linear_query "$query" >/dev/null
+}
+
 issue_table_json=$(
   linear_query "query { project(id: \"${PROJECT_ID}\") { issues(first: 100) { nodes { id identifier state { name } } } } }" |
     jq -c '.data.project.issues.nodes'
 )
+
+find_issue_id() {
+  local identifier="$1"
+  jq -r --arg identifier "$identifier" '.[] | select(.identifier == $identifier) | .id' <<<"$issue_table_json"
+}
 
 find_issue_state_name() {
   local identifier="$1"
@@ -59,11 +82,13 @@ for workspace_dir in "$WORKSPACE_ROOT"/CEN-*; do
   [[ -d "$workspace_dir/.git" ]] || continue
 
   issue_key=$(basename "$workspace_dir")
+  issue_id=$(find_issue_id "$issue_key")
   current_state=$(find_issue_state_name "$issue_key")
   branch=$(git -C "$workspace_dir" branch --show-current 2>/dev/null || true)
   dirty=$(git -C "$workspace_dir" status --porcelain 2>/dev/null || true)
   age_minutes=$(minutes_since_change "$workspace_dir")
 
+  [[ -n "$issue_id" && "$issue_id" != "null" ]] || continue
   [[ "$current_state" == "In Progress" ]] || continue
   [[ -n "$branch" ]] || continue
   [[ "$branch" =~ ^codex/${issue_key}- ]] || continue
@@ -80,9 +105,11 @@ for workspace_dir in "$WORKSPACE_ROOT"/CEN-*; do
   fi
 
   if (( ahead_count == 0 )); then
-    echo "validator flagged ${issue_key}: no PR and no changes after completion window"
+    linear_mutation "$issue_id" "$STATE_TODO_ID"
+    echo "validator reset ${issue_key} to Todo: no PR and no changes after completion window"
     continue
   fi
 
-  echo "validator flagged ${issue_key}: branch has commits but no PR after completion window"
+  linear_mutation "$issue_id" "$STATE_TODO_ID"
+  echo "validator reset ${issue_key} to Todo: branch has commits but no PR after completion window"
 done
