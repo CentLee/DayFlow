@@ -83,6 +83,44 @@ ORDER BY id ASC`)).
 	}
 }
 
+func TestPostgresBudgetStoreLoadBudgetTemplates(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	store := NewPostgresBudgetStore(db)
+	updatedAt := time.Date(2026, 3, 17, 0, 0, 0, 0, time.UTC)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+SELECT bit.id, bit.name, bit.kind, bit.default_amount, bit.default_enabled, bit.default_note, bit.default_billing_day, bit.sort_order, bit.updated_at
+FROM budget_item_templates bit
+JOIN expense_books eb ON eb.id = bit.expense_book_id
+WHERE eb.owner_user_id = $1
+ORDER BY bit.sort_order ASC, bit.id ASC`)).
+		WithArgs("usr_001").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "kind", "default_amount", "default_enabled", "default_note", "default_billing_day", "sort_order", "updated_at"}).
+			AddRow("tmpl_001", "Rent", "fixed", 100, true, "", "20일", 0, updatedAt).
+			AddRow("tmpl_002", "Phone", "fixed", 8, false, "promo", "15일", 1, updatedAt))
+
+	templates, err := store.LoadBudgetTemplates(context.Background(), "usr_001")
+	if err != nil {
+		t.Fatalf("load budget templates: %v", err)
+	}
+
+	if len(templates.FixedItems) != 2 {
+		t.Fatalf("expected 2 templates, got %#v", templates.FixedItems)
+	}
+	if templates.FixedItems[0].Name != "Rent" || templates.FixedItems[1].DefaultBillingDay != "15일" {
+		t.Fatalf("unexpected template payload: %#v", templates.FixedItems)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
 func TestPostgresBudgetStoreLoadBudgetBoardReturnsNotFoundForForeignOwner(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -206,6 +244,74 @@ VALUES ($1, $2, NULL, $3, $4, $5, $6)`)).
 	}
 	if saved.BillingReminders[0].Kind != "reminder" {
 		t.Fatalf("expected reminder kind to be set, got %#v", saved.BillingReminders[0])
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestPostgresBudgetStoreSaveBudgetTemplatesReplacesOwnerTemplates(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Date(2026, 3, 18, 8, 30, 0, 0, time.UTC)
+	store := NewPostgresBudgetStore(db)
+	store.now = func() time.Time { return now }
+	idSequence := 0
+	store.newID = func(prefix string) string {
+		idSequence++
+		return fmt.Sprintf("%s_gen_%d", prefix, idSequence)
+	}
+
+	templates := domain.BudgetTemplates{
+		FixedItems: []domain.BudgetTemplate{
+			{Name: "Rent", DefaultAmount: 100, DefaultEnabled: true, DefaultBillingDay: "20일"},
+			{ID: "tmpl_keep", Name: "Phone", Kind: "fixed", DefaultAmount: 8, DefaultEnabled: false, DefaultNote: "promo", DefaultBillingDay: "15일"},
+		},
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id FROM expense_books WHERE owner_user_id = $1`)).
+		WithArgs("usr_001").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("book_001"))
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM budget_item_templates WHERE expense_book_id = $1`)).
+		WithArgs("book_001").
+		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec(regexp.QuoteMeta(`
+INSERT INTO budget_item_templates (
+    id, expense_book_id, name, kind, default_amount, default_enabled,
+    default_note, default_billing_day, sort_order, updated_at
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`)).
+		WithArgs("tmpl_gen_1", "book_001", "Rent", "fixed", 100, true, "", "20일", 0, now).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta(`
+INSERT INTO budget_item_templates (
+    id, expense_book_id, name, kind, default_amount, default_enabled,
+    default_note, default_billing_day, sort_order, updated_at
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`)).
+		WithArgs("tmpl_keep", "book_001", "Phone", "fixed", 8, false, "promo", "15일", 1, now).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	saved, err := store.SaveBudgetTemplates(context.Background(), "usr_001", templates)
+	if err != nil {
+		t.Fatalf("save budget templates: %v", err)
+	}
+
+	if len(saved.FixedItems) != 2 {
+		t.Fatalf("expected 2 saved templates, got %#v", saved.FixedItems)
+	}
+	if saved.FixedItems[0].ID != "tmpl_gen_1" || saved.FixedItems[0].Kind != "fixed" || saved.FixedItems[0].SortOrder != 0 {
+		t.Fatalf("unexpected first saved template: %#v", saved.FixedItems[0])
+	}
+	if saved.FixedItems[1].UpdatedAt != now.Format(time.RFC3339) || saved.FixedItems[1].SortOrder != 1 {
+		t.Fatalf("unexpected second saved template: %#v", saved.FixedItems[1])
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

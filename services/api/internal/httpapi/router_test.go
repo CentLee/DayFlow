@@ -162,6 +162,147 @@ func TestBudgetMonthRequiresAuthentication(t *testing.T) {
 	}
 }
 
+func TestBudgetTemplatesRequiresAuthentication(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/v1/budget/templates", nil)
+	rec := httptest.NewRecorder()
+
+	NewRouter(store.NewMemoryStore()).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestBudgetTemplatesPutPersistsAndSeedsFutureMonths(t *testing.T) {
+	handler := NewRouter(store.NewMemoryStore())
+	token := loginTokenForUser(t, handler, "owner@dayflow.local", "secret1234")
+
+	getRec := performAuthedJSONRequest(t, handler, token, http.MethodGet, "/v1/budget/templates", nil)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", getRec.Code, getRec.Body.String())
+	}
+
+	var initial struct {
+		FixedItems []struct {
+			Name string `json:"name"`
+		} `json:"fixed_items"`
+	}
+	decodeResponse(t, getRec, &initial)
+	if len(initial.FixedItems) != 4 {
+		t.Fatalf("expected 4 default templates, got %#v", initial.FixedItems)
+	}
+
+	putRec := performAuthedJSONRequest(t, handler, token, http.MethodPut, "/v1/budget/templates", map[string]any{
+		"fixed_items": []map[string]any{
+			{
+				"name":                "Rent",
+				"default_amount":      120,
+				"default_enabled":     true,
+				"default_billing_day": "25일",
+			},
+			{
+				"name":                "Phone",
+				"kind":                "fixed",
+				"default_amount":      10,
+				"default_enabled":     false,
+				"default_note":        "discount pending",
+				"default_billing_day": "15일",
+			},
+		},
+	})
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", putRec.Code, putRec.Body.String())
+	}
+
+	var saved struct {
+		FixedItems []struct {
+			ID             string `json:"id"`
+			Name           string `json:"name"`
+			Kind           string `json:"kind"`
+			DefaultAmount  int    `json:"default_amount"`
+			DefaultEnabled bool   `json:"default_enabled"`
+			SortOrder      int    `json:"sort_order"`
+		} `json:"fixed_items"`
+	}
+	decodeResponse(t, putRec, &saved)
+	if len(saved.FixedItems) != 2 {
+		t.Fatalf("expected 2 saved templates, got %#v", saved.FixedItems)
+	}
+	if saved.FixedItems[0].ID == "" || saved.FixedItems[0].Kind != "fixed" || saved.FixedItems[0].SortOrder != 0 {
+		t.Fatalf("expected normalized first template, got %#v", saved.FixedItems[0])
+	}
+	if saved.FixedItems[1].DefaultEnabled {
+		t.Fatalf("expected second template to stay disabled, got %#v", saved.FixedItems[1])
+	}
+
+	fetchRec := performAuthedJSONRequest(t, handler, token, http.MethodGet, "/v1/budget/templates", nil)
+	if fetchRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", fetchRec.Code, fetchRec.Body.String())
+	}
+
+	var fetched struct {
+		FixedItems []struct {
+			Name          string `json:"name"`
+			DefaultAmount int    `json:"default_amount"`
+		} `json:"fixed_items"`
+	}
+	decodeResponse(t, fetchRec, &fetched)
+	if len(fetched.FixedItems) != 2 || fetched.FixedItems[0].Name != "Rent" || fetched.FixedItems[1].DefaultAmount != 10 {
+		t.Fatalf("expected persisted templates, got %#v", fetched.FixedItems)
+	}
+
+	monthRec := performAuthedJSONRequest(t, handler, token, http.MethodGet, "/v1/budget/months/2026-08", nil)
+	if monthRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", monthRec.Code, monthRec.Body.String())
+	}
+
+	var month struct {
+		FixedItems []struct {
+			Name            string `json:"name"`
+			Amount          int    `json:"amount"`
+			Enabled         bool   `json:"enabled"`
+			BillingDayLabel string `json:"billing_day_label"`
+		} `json:"fixed_items"`
+	}
+	decodeResponse(t, monthRec, &month)
+	if len(month.FixedItems) != 2 {
+		t.Fatalf("expected seeded fixed items, got %#v", month.FixedItems)
+	}
+	if month.FixedItems[0].Name != "Rent" || month.FixedItems[0].Amount != 120 || month.FixedItems[1].Enabled {
+		t.Fatalf("expected future month seeded from templates, got %#v", month.FixedItems)
+	}
+}
+
+func TestBudgetTemplatesAreScopedPerUser(t *testing.T) {
+	handler := NewRouter(store.NewMemoryStore())
+	ownerToken := loginTokenForUser(t, handler, "owner@dayflow.local", "secret1234")
+	outsiderToken := loginTokenForUser(t, handler, "outside@dayflow.local", "secret1234")
+
+	putRec := performAuthedJSONRequest(t, handler, ownerToken, http.MethodPut, "/v1/budget/templates", map[string]any{
+		"fixed_items": []map[string]any{{
+			"name":            "Owner Only Rent",
+			"default_amount":  777,
+			"default_enabled": true,
+		}},
+	})
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", putRec.Code, putRec.Body.String())
+	}
+
+	ownerRec := performAuthedJSONRequest(t, handler, ownerToken, http.MethodGet, "/v1/budget/templates", nil)
+	outsiderRec := performAuthedJSONRequest(t, handler, outsiderToken, http.MethodGet, "/v1/budget/templates", nil)
+	if ownerRec.Code != http.StatusOK || outsiderRec.Code != http.StatusOK {
+		t.Fatalf("expected scoped reads to succeed, owner=%d outsider=%d", ownerRec.Code, outsiderRec.Code)
+	}
+
+	if !bytes.Contains(ownerRec.Body.Bytes(), []byte("Owner Only Rent")) {
+		t.Fatalf("expected owner template in owner payload: %s", ownerRec.Body.String())
+	}
+	if bytes.Contains(outsiderRec.Body.Bytes(), []byte("Owner Only Rent")) {
+		t.Fatalf("expected template isolation, outsider payload leaked: %s", outsiderRec.Body.String())
+	}
+}
+
 func TestBudgetMonthGetReturnsFullBoard(t *testing.T) {
 	handler := NewRouter(store.NewMemoryStore())
 	token := loginTokenForUser(t, handler, "owner@dayflow.local", "secret1234")

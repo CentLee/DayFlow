@@ -69,6 +69,22 @@ type BudgetSummary struct {
 	FreeCashAmount      int `json:"free_cash_amount"`
 }
 
+type BudgetTemplate struct {
+	ID                string `json:"id"`
+	Name              string `json:"name"`
+	Kind              string `json:"kind"`
+	DefaultAmount     int    `json:"default_amount"`
+	DefaultEnabled    bool   `json:"default_enabled"`
+	DefaultNote       string `json:"default_note,omitempty"`
+	DefaultBillingDay string `json:"default_billing_day,omitempty"`
+	SortOrder         int    `json:"sort_order"`
+	UpdatedAt         string `json:"updated_at"`
+}
+
+type BudgetTemplates struct {
+	FixedItems []BudgetTemplate `json:"fixed_items"`
+}
+
 type BudgetBoard struct {
 	Month            BudgetMonth    `json:"month"`
 	Summary          BudgetSummary  `json:"summary"`

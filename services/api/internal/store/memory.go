@@ -93,6 +93,7 @@ type MemoryStore struct {
 	calendarMembers map[string]map[string]string
 	events          map[string]eventRecord
 	budgetBoards    map[string]map[string]domain.BudgetBoard
+	budgetTemplates map[string]domain.BudgetTemplates
 	counter         int
 	nextCalendarSeq int
 	nextEventSeq    int
@@ -116,6 +117,7 @@ func NewMemoryStore() *MemoryStore {
 		calendarMembers: make(map[string]map[string]string),
 		events:          make(map[string]eventRecord),
 		budgetBoards:    make(map[string]map[string]domain.BudgetBoard),
+		budgetTemplates: make(map[string]domain.BudgetTemplates),
 		counter:         4,
 		nextCalendarSeq: 3,
 		nextEventSeq:    3,
@@ -552,7 +554,7 @@ func (s *MemoryStore) LoadBudgetBoard(userID, monthKey string) (domain.BudgetBoa
 		}
 	}
 
-	board := s.defaultBudgetBoardLocked(monthKey)
+	board := s.defaultBudgetBoardLocked(userID, monthKey)
 	if _, ok := s.budgetBoards[userID]; !ok {
 		s.budgetBoards[userID] = make(map[string]domain.BudgetBoard)
 	}
@@ -608,13 +610,72 @@ func (s *MemoryStore) SaveBudgetBoard(userID string, board domain.BudgetBoard) (
 	return cloneBudgetBoard(stored), nil
 }
 
-func (s *MemoryStore) defaultBudgetBoardLocked(monthKey string) domain.BudgetBoard {
+func (s *MemoryStore) LoadBudgetTemplates(userID string) (domain.BudgetTemplates, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.userByIDLocked(userID); !ok {
+		return domain.BudgetTemplates{}, ErrForbidden
+	}
+	templates, ok := s.budgetTemplates[userID]
+	if !ok {
+		templates = s.defaultBudgetTemplatesLocked()
+		s.budgetTemplates[userID] = templates
+	}
+	return cloneBudgetTemplates(templates), nil
+}
+
+func (s *MemoryStore) SaveBudgetTemplates(userID string, templates domain.BudgetTemplates) (domain.BudgetTemplates, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.userByIDLocked(userID); !ok {
+		return domain.BudgetTemplates{}, ErrForbidden
+	}
+
 	now := s.now().Format(time.RFC3339)
-	fixed := []domain.BudgetItem{
-		{ID: "itm_001", Name: "월세 및 관리비", Kind: "fixed", Amount: 21, Enabled: true, BillingDayLabel: "20일", UpdatedAt: now},
-		{ID: "itm_002", Name: "대출이자", Kind: "fixed", Amount: 36, Enabled: true, BillingDayLabel: "5일", UpdatedAt: now},
-		{ID: "itm_003", Name: "핸드폰요금", Kind: "fixed", Amount: 8, Enabled: true, BillingDayLabel: "15일", UpdatedAt: now},
-		{ID: "itm_004", Name: "신용카드", Kind: "fixed", Amount: 88, Enabled: true, BillingDayLabel: "26일", UpdatedAt: now},
+	stored := cloneBudgetTemplates(templates)
+	for index := range stored.FixedItems {
+		item := &stored.FixedItems[index]
+		if strings.TrimSpace(item.Name) == "" {
+			return domain.BudgetTemplates{}, fmt.Errorf("template name is required: %w", ErrInvalidInput)
+		}
+		if item.Kind == "" {
+			item.Kind = "fixed"
+		}
+		if item.Kind != "fixed" {
+			return domain.BudgetTemplates{}, fmt.Errorf("template kind must be fixed: %w", ErrInvalidInput)
+		}
+		if item.ID == "" {
+			item.ID = s.nextBudgetIDLocked("tmpl")
+		}
+		item.SortOrder = index
+		item.UpdatedAt = now
+	}
+
+	s.budgetTemplates[userID] = stored
+	return cloneBudgetTemplates(stored), nil
+}
+
+func (s *MemoryStore) defaultBudgetBoardLocked(userID, monthKey string) domain.BudgetBoard {
+	now := s.now().Format(time.RFC3339)
+	templates, ok := s.budgetTemplates[userID]
+	if !ok {
+		templates = s.defaultBudgetTemplatesLocked()
+		s.budgetTemplates[userID] = templates
+	}
+	fixed := make([]domain.BudgetItem, 0, len(templates.FixedItems))
+	for _, template := range templates.FixedItems {
+		fixed = append(fixed, domain.BudgetItem{
+			ID:              s.nextBudgetIDLocked("bitm"),
+			Name:            template.Name,
+			Kind:            template.Kind,
+			Amount:          template.DefaultAmount,
+			Enabled:         template.DefaultEnabled,
+			Note:            template.DefaultNote,
+			BillingDayLabel: template.DefaultBillingDay,
+			UpdatedAt:       now,
+		})
 	}
 	buckets := []domain.BudgetBucket{
 		{ID: "bkt_001", Name: "점심 및 주말 식대", PlannedAmount: 12, ActualAmount: 0, FormulaHint: "평일 1 + 주말 3", UpdatedAt: now},
@@ -639,6 +700,18 @@ func (s *MemoryStore) defaultBudgetBoardLocked(monthKey string) domain.BudgetBoa
 	}
 	board.Summary, board.Month.RemainingBudgetAmount = deriveBudgetSummary(board.Month, board.FixedItems, board.VariableBuckets)
 	return board
+}
+
+func (s *MemoryStore) defaultBudgetTemplatesLocked() domain.BudgetTemplates {
+	now := s.now().Format(time.RFC3339)
+	return domain.BudgetTemplates{
+		FixedItems: []domain.BudgetTemplate{
+			{ID: "tmpl_001", Name: "월세 및 관리비", Kind: "fixed", DefaultAmount: 21, DefaultEnabled: true, DefaultBillingDay: "20일", SortOrder: 0, UpdatedAt: now},
+			{ID: "tmpl_002", Name: "대출이자", Kind: "fixed", DefaultAmount: 36, DefaultEnabled: true, DefaultBillingDay: "5일", SortOrder: 1, UpdatedAt: now},
+			{ID: "tmpl_003", Name: "핸드폰요금", Kind: "fixed", DefaultAmount: 8, DefaultEnabled: true, DefaultBillingDay: "15일", SortOrder: 2, UpdatedAt: now},
+			{ID: "tmpl_004", Name: "신용카드", Kind: "fixed", DefaultAmount: 88, DefaultEnabled: true, DefaultBillingDay: "26일", SortOrder: 3, UpdatedAt: now},
+		},
+	}
 }
 
 func (s *MemoryStore) meForUserIDLocked(userID string) (domain.Me, bool) {
@@ -770,6 +843,15 @@ func cloneBudgetBoard(board domain.BudgetBoard) domain.BudgetBoard {
 	cloned.BillingReminders = append([]domain.BudgetItem(nil), board.BillingReminders...)
 	if cloned.BillingReminders == nil {
 		cloned.BillingReminders = []domain.BudgetItem{}
+	}
+	return cloned
+}
+
+func cloneBudgetTemplates(templates domain.BudgetTemplates) domain.BudgetTemplates {
+	cloned := templates
+	cloned.FixedItems = append([]domain.BudgetTemplate(nil), templates.FixedItems...)
+	if cloned.FixedItems == nil {
+		cloned.FixedItems = []domain.BudgetTemplate{}
 	}
 	return cloned
 }
