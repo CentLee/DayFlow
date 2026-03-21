@@ -5,6 +5,7 @@ ROOT_DIR="/Users/kakao_ent/Documents/DayFlow"
 WORKSPACE_ROOT="$ROOT_DIR/.symphony/workspaces"
 MAX_SESSION_MINUTES="${MAX_SESSION_MINUTES:-15}"
 MAX_UNTRACKED_MINUTES="${MAX_UNTRACKED_MINUTES:-8}"
+MAX_BRANCH_ONLY_STALL_MINUTES="${MAX_BRANCH_ONLY_STALL_MINUTES:-3}"
 MAX_TOKEN_TOTAL="${MAX_TOKEN_TOTAL:-120000}"
 if [[ -z "${LINEAR_API_KEY:-}" ]]; then
   echo "LINEAR_API_KEY is required" >&2
@@ -107,6 +108,13 @@ should_reset_issue() {
 
   if (( token_total >= MAX_TOKEN_TOTAL )); then
     echo "token ceiling exceeded (${token_total})"
+    return 0
+  fi
+
+  if (( dirty_minutes >= MAX_BRANCH_ONLY_STALL_MINUTES )) && [[ "$branch" =~ ^codex/${issue_key}- ]] && [[ -z "$(git -C "$workspace_dir" status --porcelain 2>/dev/null)" ]] && [[ "$head" == "$develop_head" ]] && ! has_open_pr "$branch"; then
+    stale_dir="${workspace_dir}.stale.$(date +%s)"
+    mv "$workspace_dir" "$stale_dir"
+    echo "branch-only stall recovered via $(basename "$stale_dir")"
     return 0
   fi
 

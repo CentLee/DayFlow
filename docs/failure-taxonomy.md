@@ -142,6 +142,25 @@ Guard:
 
 - `scripts/guard_branch_bootstrap_stalls.sh`
 
+### F8. Branch-only stall
+
+Symptoms:
+
+- issue branch exists
+- workspace is still clean
+- `HEAD == origin/develop`
+- no PR exists
+
+Recovery:
+
+- treat the branch as a failed bootstrap continuation
+- move the workspace aside as stale
+- retry from a fresh workspace
+
+Guard:
+
+- `scripts/guard_issue_sessions.sh`
+
 ## Recovery priorities
 
 When a failure occurs, apply this order:
