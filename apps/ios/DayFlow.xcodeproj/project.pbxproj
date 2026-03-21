@@ -1,0 +1,455 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		1B1A180DA98E76FEE71883C1 /* AppStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A4B407B057260784D3B0D3C /* AppStoreTests.swift */; };
+		23AB900B9849A76AEB119786 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD277BDC3A98C7B74EAB0725 /* Models.swift */; };
+		3A0FF9570440F4F927828EBE /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70AF1A9F91D191D8DB1B80A5 /* APIClient.swift */; };
+		4B3C91274B4FE533B25AEA1E /* AppStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92A09C72975800F924637633 /* AppStore.swift */; };
+		530447414CB3BD867FA39BC3 /* DayFlowApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BF8F4FB9CC06964A124371D /* DayFlowApp.swift */; };
+		A818F4C14F1A455FDAD8B5BC /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 364B0443B225478B7BC828FA /* RootView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		2016EBFBA61870BAC2871809 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 747A1F50A57447DC92F35F0A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 6A68D8F1DFF70EE624DDAD27;
+			remoteInfo = DayFlow;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0A4B407B057260784D3B0D3C /* AppStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStoreTests.swift; sourceTree = "<group>"; };
+		364B0443B225478B7BC828FA /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		5EB8D2D6EB2CAFFD6CFB7F9B /* DayFlow.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = DayFlow.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		70AF1A9F91D191D8DB1B80A5 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		7BF8F4FB9CC06964A124371D /* DayFlowApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DayFlowApp.swift; sourceTree = "<group>"; };
+		92A09C72975800F924637633 /* AppStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStore.swift; sourceTree = "<group>"; };
+		CD277BDC3A98C7B74EAB0725 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		F12ED1A49A056AC64585B759 /* DayFlowTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = DayFlowTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		307253F390EC9D575D111CE2 /* Store */ = {
+			isa = PBXGroup;
+			children = (
+				92A09C72975800F924637633 /* AppStore.swift */,
+			);
+			path = Store;
+			sourceTree = "<group>";
+		};
+		777FF03EC8068BC9B968918C /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				70AF1A9F91D191D8DB1B80A5 /* APIClient.swift */,
+			);
+			path = Networking;
+			sourceTree = "<group>";
+		};
+		78747292FE646DD8A5D2CCBD /* DayFlow */ = {
+			isa = PBXGroup;
+			children = (
+				7BF8F4FB9CC06964A124371D /* DayFlowApp.swift */,
+				A9C9782E14B5D17CBF88D8EF /* Models */,
+				777FF03EC8068BC9B968918C /* Networking */,
+				307253F390EC9D575D111CE2 /* Store */,
+				F73C26E8D82254A29064A2BF /* Views */,
+			);
+			path = DayFlow;
+			sourceTree = "<group>";
+		};
+		83A839BC5CDF2FACCB2334EE /* DayFlowTests */ = {
+			isa = PBXGroup;
+			children = (
+				0A4B407B057260784D3B0D3C /* AppStoreTests.swift */,
+			);
+			path = DayFlowTests;
+			sourceTree = "<group>";
+		};
+		84B99617DB83B97E9EEC10F4 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				5EB8D2D6EB2CAFFD6CFB7F9B /* DayFlow.app */,
+				F12ED1A49A056AC64585B759 /* DayFlowTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		8D036B72E3ADDC953654DB92 = {
+			isa = PBXGroup;
+			children = (
+				78747292FE646DD8A5D2CCBD /* DayFlow */,
+				83A839BC5CDF2FACCB2334EE /* DayFlowTests */,
+				84B99617DB83B97E9EEC10F4 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A9C9782E14B5D17CBF88D8EF /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				CD277BDC3A98C7B74EAB0725 /* Models.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		F73C26E8D82254A29064A2BF /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				364B0443B225478B7BC828FA /* RootView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		6A68D8F1DFF70EE624DDAD27 /* DayFlow */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F8378B15E94C68093C12BB1C /* Build configuration list for PBXNativeTarget "DayFlow" */;
+			buildPhases = (
+				D3D61BF747E4FA59BE339E8E /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = DayFlow;
+			packageProductDependencies = (
+			);
+			productName = DayFlow;
+			productReference = 5EB8D2D6EB2CAFFD6CFB7F9B /* DayFlow.app */;
+			productType = "com.apple.product-type.application";
+		};
+		BF7638ABC261FD081B1B8CA3 /* DayFlowTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3D5A2B3BA0C2D3AB193D0CD0 /* Build configuration list for PBXNativeTarget "DayFlowTests" */;
+			buildPhases = (
+				CD385572A6BE1D641BC3A502 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				CBC2B37E75BC1E68C6D92CAA /* PBXTargetDependency */,
+			);
+			name = DayFlowTests;
+			packageProductDependencies = (
+			);
+			productName = DayFlowTests;
+			productReference = F12ED1A49A056AC64585B759 /* DayFlowTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		747A1F50A57447DC92F35F0A /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = 9C69D6C7B542082A218254FC /* Build configuration list for PBXProject "DayFlow" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 8D036B72E3ADDC953654DB92;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 84B99617DB83B97E9EEC10F4 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				6A68D8F1DFF70EE624DDAD27 /* DayFlow */,
+				BF7638ABC261FD081B1B8CA3 /* DayFlowTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		CD385572A6BE1D641BC3A502 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1B1A180DA98E76FEE71883C1 /* AppStoreTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D3D61BF747E4FA59BE339E8E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3A0FF9570440F4F927828EBE /* APIClient.swift in Sources */,
+				4B3C91274B4FE533B25AEA1E /* AppStore.swift in Sources */,
+				530447414CB3BD867FA39BC3 /* DayFlowApp.swift in Sources */,
+				23AB900B9849A76AEB119786 /* Models.swift in Sources */,
+				A818F4C14F1A455FDAD8B5BC /* RootView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		CBC2B37E75BC1E68C6D92CAA /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 6A68D8F1DFF70EE624DDAD27 /* DayFlow */;
+			targetProxy = 2016EBFBA61870BAC2871809 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0324401CF271ABF2EB7C51CE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DayFlow.app/DayFlow";
+			};
+			name = Debug;
+		};
+		03AD04B2194E83222B3E68A0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		0C6A26276674022C7A37782D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.kakaoent.dayflow;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		69BFA5DDC12005F13ED5138D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.kakaoent.dayflow;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		A3B8896A682BA1B2CF62415E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DayFlow.app/DayFlow";
+			};
+			name = Release;
+		};
+		E5A58070BD09D731C5906EB2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		3D5A2B3BA0C2D3AB193D0CD0 /* Build configuration list for PBXNativeTarget "DayFlowTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0324401CF271ABF2EB7C51CE /* Debug */,
+				A3B8896A682BA1B2CF62415E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		9C69D6C7B542082A218254FC /* Build configuration list for PBXProject "DayFlow" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				03AD04B2194E83222B3E68A0 /* Debug */,
+				E5A58070BD09D731C5906EB2 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F8378B15E94C68093C12BB1C /* Build configuration list for PBXNativeTarget "DayFlow" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0C6A26276674022C7A37782D /* Debug */,
+				69BFA5DDC12005F13ED5138D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 747A1F50A57447DC92F35F0A /* Project object */;
+}
