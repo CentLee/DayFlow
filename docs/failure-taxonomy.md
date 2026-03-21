@@ -121,6 +121,26 @@ Follow-up:
 
 - improve supervisor health summaries so active ownership can be inferred even when dashboard session display lags
 
+### F7. Branch bootstrap stall
+
+Symptoms:
+
+- fresh workspace exists
+- branch remains `develop`
+- no diff appears
+- issue stays in `Todo`
+
+Recovery:
+
+- treat the workspace as an invalid bootstrap attempt
+- move the stale workspace aside
+- keep the supervisor alive
+- retry from a fresh workspace
+
+Guard:
+
+- `scripts/guard_branch_bootstrap_stalls.sh`
+
 ## Recovery priorities
 
 When a failure occurs, apply this order:
