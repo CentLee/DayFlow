@@ -27,6 +27,14 @@ Notes:
 - server returns authoritative recalculated values
 - if request fails, client restores the last confirmed snapshot and surfaces retry state
 
+Current KPI sync assumptions:
+
+- optimistic client calculations should mirror the server formulas in `docs/api-contract.md`
+- `fixed_cost_total` uses only enabled fixed items
+- `variable_bucket_total` uses planned bucket amounts
+- `free_cash_amount` uses actual bucket amounts
+- `billing_reminders` and `formula_hint` do not affect KPI math
+
 ## Calendar Sync
 
 - server is source of truth
@@ -51,6 +59,5 @@ Notes:
 
 ## Current Contract Gaps
 
-- backend memory mocks currently return only owned calendars from `GET /v1/calendars`; shared calendars need to appear there before iOS uses it as the final source of truth
-- iOS mock networking currently returns Swift camelCase model properties directly; real HTTP decoding must map snake_case contract fields like `display_name`, `updated_at`, and `current_budget_month_key`
-- iOS bootstrap currently derives the budget month locally; wired networking should use `current_budget_month_key` from `GET /v1/me`
+- none for the current budget KPI formulas or budget-month payload shape; the served backend response, sync rules, and API examples now match
+- follow-up work remains in `[iOS] connect budget board to live API`, but that is a wiring task rather than a current payload mismatch

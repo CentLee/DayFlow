@@ -340,6 +340,15 @@ func TestBudgetMonthGetReturnsFullBoard(t *testing.T) {
 	if len(payload.FixedItems) != 4 || len(payload.VariableBuckets) != 2 || len(payload.BillingReminders) != 2 {
 		t.Fatalf("expected full board payload, got %+v", payload)
 	}
+	if payload.FixedItems[0]["id"] != "bitm_001" || payload.FixedItems[0]["name"] != "월세 및 관리비" || payload.FixedItems[0]["amount"] != float64(21) {
+		t.Fatalf("expected first fixed item to match contract example, got %+v", payload.FixedItems[0])
+	}
+	if payload.VariableBuckets[0]["id"] != "bkt_001" || payload.VariableBuckets[0]["name"] != "점심 및 주말 식대" || payload.VariableBuckets[0]["planned_amount"] != float64(12) {
+		t.Fatalf("expected first variable bucket to match contract example, got %+v", payload.VariableBuckets[0])
+	}
+	if payload.BillingReminders[0]["id"] != "rem_001" || payload.BillingReminders[0]["name"] != "인터넷" || payload.BillingReminders[0]["kind"] != "reminder" {
+		t.Fatalf("expected first billing reminder to match contract example, got %+v", payload.BillingReminders[0])
+	}
 }
 
 func TestBudgetMonthPutPersistsBoardAndDerivesSummary(t *testing.T) {

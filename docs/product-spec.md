@@ -109,10 +109,14 @@ These insights shape the MVP:
 
 - `current money` maps to `current_cash_amount` and is a manual month value
 - `monthly budget` maps to `base_budget_amount`
+- `carry over` maps to `carry_over_amount` and is a manual month value
 - `fixed costs` is the sum of enabled fixed-item amounts
 - `savings` maps to `saving_amount`
+- `variable bucket total` is the sum of bucket `planned_amount` values
 - `remaining budget` is `base_budget_amount - fixed_cost_total - saving_amount - variable_bucket_total + carry_over_amount`
 - `free cash` remains a supporting derived value: `current_cash_amount - enabled fixed item amounts - variable bucket actual amounts`
+- bucket `actual_amount` values affect `free cash` but do not change `remaining budget`
+- `billing_reminders` and bucket `formula_hint` text are informational and do not affect KPI calculations
 
 ### Follow-up Notes
 

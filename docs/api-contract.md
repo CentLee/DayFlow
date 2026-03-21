@@ -264,28 +264,116 @@ Request:
 
 Returns the full month board in one call.
 
+Current KPI derivation assumptions:
+
+- `base_budget_amount`, `current_cash_amount`, `saving_amount`, and `carry_over_amount` are manual month inputs
+- `fixed_cost_total` is the sum of enabled `fixed_items[].amount`
+- `variable_bucket_total` is the sum of `variable_buckets[].planned_amount`
+- `free_cash_amount` is `current_cash_amount - enabled fixed item amounts - variable_buckets[].actual_amount`
+- `remaining_budget_amount` is `base_budget_amount - fixed_cost_total - saving_amount - variable_bucket_total + carry_over_amount`
+- `billing_reminders` and `formula_hint` are informational and do not affect KPI math
+
+Worked example for the response below:
+
+- `fixed_cost_total = 21 + 36 + 8 + 88 = 153`
+- `variable_bucket_total = 12 + 0 = 12`
+- `free_cash_amount = 118 - 153 - (0 + 0) = -35`
+- `remaining_budget_amount = 510 - 153 - 200 - 12 + 0 = 145`
+
 Response shape:
 
 ```json
 {
   "month": {
-    "id": "bmon_123",
+    "id": "bmon_001",
     "month_key": "2026-03",
     "base_budget_amount": 510,
     "current_cash_amount": 118,
     "saving_amount": 200,
     "carry_over_amount": 0,
-    "remaining_budget_amount": 16,
+    "remaining_budget_amount": 145,
     "updated_at": "2026-03-17T00:00:00Z"
   },
   "summary": {
-    "fixed_cost_total": 294,
-    "variable_bucket_total": 0,
-    "free_cash_amount": 118
+    "fixed_cost_total": 153,
+    "variable_bucket_total": 12,
+    "free_cash_amount": -35
   },
-  "fixed_items": [],
-  "variable_buckets": [],
-  "billing_reminders": []
+  "fixed_items": [
+    {
+      "id": "bitm_001",
+      "name": "월세 및 관리비",
+      "kind": "fixed",
+      "amount": 21,
+      "enabled": true,
+      "billing_day_label": "20일",
+      "updated_at": "2026-03-17T00:00:00Z"
+    },
+    {
+      "id": "bitm_002",
+      "name": "대출이자",
+      "kind": "fixed",
+      "amount": 36,
+      "enabled": true,
+      "billing_day_label": "5일",
+      "updated_at": "2026-03-17T00:00:00Z"
+    },
+    {
+      "id": "bitm_003",
+      "name": "핸드폰요금",
+      "kind": "fixed",
+      "amount": 8,
+      "enabled": true,
+      "billing_day_label": "15일",
+      "updated_at": "2026-03-17T00:00:00Z"
+    },
+    {
+      "id": "bitm_004",
+      "name": "신용카드",
+      "kind": "fixed",
+      "amount": 88,
+      "enabled": true,
+      "billing_day_label": "26일",
+      "updated_at": "2026-03-17T00:00:00Z"
+    }
+  ],
+  "variable_buckets": [
+    {
+      "id": "bkt_001",
+      "name": "점심 및 주말 식대",
+      "planned_amount": 12,
+      "actual_amount": 0,
+      "formula_hint": "평일 1 + 주말 3",
+      "updated_at": "2026-03-17T00:00:00Z"
+    },
+    {
+      "id": "bkt_002",
+      "name": "유동 금액",
+      "planned_amount": 0,
+      "actual_amount": 0,
+      "updated_at": "2026-03-17T00:00:00Z"
+    }
+  ],
+  "billing_reminders": [
+    {
+      "id": "rem_001",
+      "name": "인터넷",
+      "kind": "reminder",
+      "amount": 0,
+      "enabled": false,
+      "billing_day_label": "25일",
+      "updated_at": "2026-03-17T00:00:00Z"
+    },
+    {
+      "id": "rem_002",
+      "name": "전기 정산",
+      "kind": "reminder",
+      "amount": 0,
+      "enabled": false,
+      "billing_day_label": "월말일",
+      "updated_at": "2026-03-17T00:00:00Z"
+    }
+  ]
 }
 ```
 
@@ -297,6 +385,7 @@ Current MVP contract rules:
 
 - the request is a current-month snapshot write, not a template update
 - clients should treat KPI summary values as derived from the submitted month data rather than as authoritative write inputs
+- the server recalculates `fixed_cost_total`, `variable_bucket_total`, `free_cash_amount`, and `remaining_budget_amount` on every save and ignores conflicting submitted summary values
 - `fixed_items` are month-entry values; clients may edit fields such as `enabled`, `amount`, and notes while preserving template-owned structure fields
 - `variable_buckets` are month-entry values; clients may edit planned and actual amounts while preserving template-owned structure fields
 - `billing_reminders` are informational metadata for budget planning and do not create calendar events or notifications
