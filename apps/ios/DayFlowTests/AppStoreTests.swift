@@ -138,6 +138,40 @@ struct AppStoreTests {
     }
 
     @Test
+    func budgetReloadUsesStoredMonthKeyAndRecoversBoard() async {
+        let apiClient = StubAPIClient()
+        apiClient.hasActiveSession = true
+        apiClient.currentSession = .sample()
+        apiClient.budgetBoard = .sample(monthKey: "2026-03")
+
+        let appStore = AppStore(apiClient: apiClient)
+        await appStore.bootstrap()
+
+        apiClient.fetchBudgetHandler = { monthKey in
+            #expect(monthKey == "2026-03")
+            return .sample(monthKey: monthKey)
+        }
+
+        await appStore.budgetStore.reload()
+
+        #expect(appStore.budgetStore.board?.month.monthKey == "2026-03")
+        #expect(appStore.budgetStore.errorMessage == nil)
+        #expect(appStore.budgetStore.saveState == "synced")
+        #expect(appStore.budgetStore.lastSavedAt != nil)
+    }
+
+    @Test
+    func budgetReloadWithoutMonthKeyShowsError() async {
+        let apiClient = StubAPIClient()
+        let appStore = AppStore(apiClient: apiClient)
+
+        await appStore.budgetStore.reload()
+
+        #expect(appStore.budgetStore.errorMessage == "불러올 월 정보가 없습니다.")
+        #expect(appStore.budgetStore.saveState == "idle")
+    }
+
+    @Test
     func authScreenSwitchClearsVisibleErrors() async {
         let apiClient = StubAPIClient()
         let appStore = AppStore(apiClient: apiClient)

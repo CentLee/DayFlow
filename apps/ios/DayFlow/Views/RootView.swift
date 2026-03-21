@@ -250,22 +250,94 @@ struct BudgetBoardView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     if appStore.budgetStore.isLoading {
-                        ProgressView()
+                        ProgressView("예산 보드를 불러오는 중입니다")
                             .frame(maxWidth: .infinity, alignment: .center)
                     } else if let errorMessage = appStore.budgetStore.errorMessage {
-                        ErrorBanner(message: errorMessage)
+                        VStack(alignment: .leading, spacing: 12) {
+                            ErrorBanner(message: errorMessage)
+                            retryButton
+                        }
                     } else if let board = appStore.budgetStore.board {
+                        BudgetStatusBar(
+                            monthKey: board.month.monthKey,
+                            saveState: appStore.budgetStore.saveState,
+                            lastSavedAt: appStore.budgetStore.lastSavedAt
+                        )
                         KPICards(board: board)
                         FixedItemsSection(items: board.fixedItems)
                         VariableBucketsSection(buckets: board.variableBuckets)
                         BillingRemindersSection(reminders: board.billingReminders)
                     } else {
-                        ContentUnavailableView("예산 보드가 없습니다", systemImage: "chart.bar.doc.horizontal")
+                        VStack(alignment: .leading, spacing: 12) {
+                            ContentUnavailableView("예산 보드가 없습니다", systemImage: "chart.bar.doc.horizontal")
+                            retryButton
+                        }
                     }
                 }
                 .padding(20)
             }
             .navigationTitle("Budget")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Task {
+                            await appStore.budgetStore.reload()
+                        }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .disabled(appStore.budgetStore.isLoading || appStore.budgetStore.monthKey == nil)
+                }
+            }
+        }
+    }
+
+    private var retryButton: some View {
+        Button {
+            Task {
+                await appStore.budgetStore.reload()
+            }
+        } label: {
+            Label("다시 불러오기", systemImage: "arrow.clockwise")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(appStore.budgetStore.isLoading || appStore.budgetStore.monthKey == nil)
+    }
+}
+
+private struct BudgetStatusBar: View {
+    let monthKey: String
+    let saveState: String
+    let lastSavedAt: Date?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("\(monthKey) live board")
+                .font(.headline)
+            Text(statusMessage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(Color(.secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var statusMessage: String {
+        switch saveState {
+        case "synced":
+            if let lastSavedAt {
+                return "서버와 동기화됨 · \(lastSavedAt.formatted(date: .omitted, time: .shortened))"
+            }
+            return "서버와 동기화됨"
+        case "dirty":
+            return "변경 사항이 아직 저장되지 않았습니다."
+        case "error":
+            return "API 오류로 최신 상태를 불러오지 못했습니다."
+        default:
+            return "실시간 예산 데이터를 준비 중입니다."
         }
     }
 }

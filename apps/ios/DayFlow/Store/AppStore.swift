@@ -204,6 +204,7 @@ final class CalendarStore {
 @Observable
 final class BudgetStore {
     var board: BudgetBoardResponse?
+    var monthKey: String?
     var isLoading = false
     var errorMessage: String?
     var lastSavedAt: Date?
@@ -216,15 +217,33 @@ final class BudgetStore {
 
     @MainActor
     func load(monthKey: String) async throws {
+        self.monthKey = monthKey
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
 
         do {
             board = try await apiClient.fetchBudget(monthKey: monthKey)
+            lastSavedAt = Date()
+            saveState = "synced"
         } catch {
             board = nil
+            saveState = "error"
             throw error
+        }
+    }
+
+    @MainActor
+    func reload() async {
+        guard let monthKey else {
+            errorMessage = "불러올 월 정보가 없습니다."
+            return
+        }
+
+        do {
+            try await load(monthKey: monthKey)
+        } catch {
+            errorMessage = message(for: error)
         }
     }
 
@@ -239,9 +258,17 @@ final class BudgetStore {
 
     func reset() {
         board = nil
+        monthKey = nil
         isLoading = false
         errorMessage = nil
         lastSavedAt = nil
         saveState = "idle"
+    }
+
+    private func message(for error: Error) -> String {
+        if let localizedError = error as? LocalizedError, let description = localizedError.errorDescription {
+            return description
+        }
+        return error.localizedDescription.isEmpty ? "예산 보드를 불러오지 못했습니다." : error.localizedDescription
     }
 }
