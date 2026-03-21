@@ -8,6 +8,9 @@ MAX_BRANCH_BOOTSTRAP_MINUTES="${MAX_BRANCH_BOOTSTRAP_MINUTES:-1}"
 for workspace_dir in "$WORKSPACE_ROOT"/CEN-*; do
   [[ -d "$workspace_dir/.git" ]] || continue
 
+  issue_key=$(basename "$workspace_dir")
+  [[ "$issue_key" == *.stale.* ]] && continue
+
   branch=$(git -C "$workspace_dir" branch --show-current 2>/dev/null || true)
   if [[ -n "$branch" && "$branch" != "develop" ]]; then
     continue

@@ -132,6 +132,7 @@ for workspace_dir in "$WORKSPACE_ROOT"/CEN-*; do
   [[ -d "$workspace_dir/.git" ]] || continue
 
   issue_key=$(basename "$workspace_dir")
+  [[ "$issue_key" == *.stale.* ]] && continue
   issue_id=$(find_issue_id "$issue_key")
   current_state=$(find_issue_state_name "$issue_key")
 

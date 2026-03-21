@@ -33,7 +33,9 @@ if (( active_count == 0 )); then
   exit 0
 fi
 
-workspace_count=$(find "$WORKSPACE_ROOT" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+workspace_count=$(
+  find "$WORKSPACE_ROOT" -mindepth 1 -maxdepth 1 -type d ! -name '*.stale.*' | wc -l | tr -d ' '
+)
 if (( workspace_count > 0 )); then
   exit 0
 fi
