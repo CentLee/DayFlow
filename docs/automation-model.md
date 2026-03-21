@@ -150,6 +150,7 @@ All PRs must answer:
 DayFlow now enforces these automatic state transitions:
 
 - no PR: issue stays in `Todo` before pickup, then becomes `In Progress` while owned
+- branch creation alone does not count as ownership; a dirty diff or `HEAD != origin/develop` is required
 - open draft PR: issue stays in `In Progress`
 - open ready-for-review PR: issue moves to `In Review`
 - ready PR with fresh review findings: PR returns to draft and issue returns to `Todo`

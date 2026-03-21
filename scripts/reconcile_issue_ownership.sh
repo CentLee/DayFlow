@@ -79,7 +79,6 @@ workspace_is_owned() {
   head=$(git -C "$workspace_dir" rev-parse HEAD 2>/dev/null || true)
   develop_head=$(git -C "$workspace_dir" rev-parse origin/develop 2>/dev/null || true)
 
-  [[ "$branch" =~ ^codex/${issue_key}- ]] && return 0
   [[ -n "$status" ]] && return 0
   [[ -n "$head" && -n "$develop_head" && "$head" != "$develop_head" ]] && return 0
   return 1
