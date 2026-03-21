@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="/Users/kakao_ent/Documents/DayFlow"
 WORKSPACE_ROOT="$ROOT_DIR/.symphony/workspaces"
-MAX_BRANCH_BOOTSTRAP_MINUTES="${MAX_BRANCH_BOOTSTRAP_MINUTES:-3}"
+MAX_BRANCH_BOOTSTRAP_MINUTES="${MAX_BRANCH_BOOTSTRAP_MINUTES:-1}"
 
 for workspace_dir in "$WORKSPACE_ROOT"/CEN-*; do
   [[ -d "$workspace_dir/.git" ]] || continue
@@ -18,6 +18,8 @@ for workspace_dir in "$WORKSPACE_ROOT"/CEN-*; do
   age_minutes=$(((now - modified) / 60))
 
   if (( age_minutes >= MAX_BRANCH_BOOTSTRAP_MINUTES )); then
-    echo "guard flagged branch bootstrap stall: $(basename "$workspace_dir") still on develop after ${age_minutes}m"
+    stale_dir="${workspace_dir}.stale.$(date +%s)"
+    mv "$workspace_dir" "$stale_dir"
+    echo "guard recovered branch bootstrap stall: $(basename "$workspace_dir") moved to $(basename "$stale_dir") after ${age_minutes}m on develop"
   fi
 done

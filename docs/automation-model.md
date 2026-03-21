@@ -19,6 +19,7 @@ Automatic:
 - active workspace ownership to `In Progress` reconciliation
 - post-run outcome validation for stale in-progress work without PR closure
 - proof-of-work refresh for open develop-targeted PRs
+- branch-bootstrap stall recovery for fresh workspaces that never leave `develop`
 
 Manual:
 
@@ -165,6 +166,7 @@ Automation scripts:
 - `scripts/reconcile_issue_ownership.sh`
 - `scripts/reconcile_review_feedback.sh`
 - `scripts/validate_issue_outcomes.sh`
+- `scripts/guard_branch_bootstrap_stalls.sh`
 - `scripts/collect_pr_proof.sh`
 - `scripts/update_pr_proof.sh`
 - `scripts/run_symphony.sh`
