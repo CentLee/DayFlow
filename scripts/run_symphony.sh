@@ -8,6 +8,7 @@ SYNC_SCRIPT="$ROOT_DIR/scripts/sync_linear_pr_states.sh"
 OWNERSHIP_SCRIPT="$ROOT_DIR/scripts/reconcile_issue_ownership.sh"
 REVIEW_FEEDBACK_SCRIPT="$ROOT_DIR/scripts/reconcile_review_feedback.sh"
 PROOF_UPDATE_SCRIPT="$ROOT_DIR/scripts/update_pr_proof.sh"
+BRANCH_BOOTSTRAP_SCRIPT="$ROOT_DIR/scripts/bootstrap_issue_branches.sh"
 SESSION_GUARD_SCRIPT="$ROOT_DIR/scripts/guard_issue_sessions.sh"
 OUTCOME_VALIDATOR_SCRIPT="$ROOT_DIR/scripts/validate_issue_outcomes.sh"
 EMPTY_SPIN_GUARD_SCRIPT="$ROOT_DIR/scripts/guard_empty_workspace_spins.sh"
@@ -32,6 +33,7 @@ sync_loop() {
     "$OWNERSHIP_SCRIPT" || true
     "$SYNC_SCRIPT" || true
     "$REVIEW_FEEDBACK_SCRIPT" || true
+    "$BRANCH_BOOTSTRAP_SCRIPT" || true
     "$PROOF_UPDATE_SCRIPT" || true
     outcome_output=$("$OUTCOME_VALIDATOR_SCRIPT" || true)
     if [[ -n "$outcome_output" ]]; then
@@ -85,6 +87,7 @@ cd "$SYMPHONY_DIR"
 while true; do
   "$OWNERSHIP_SCRIPT" || true
   "$SYNC_SCRIPT" || true
+  "$BRANCH_BOOTSTRAP_SCRIPT" || true
   "$OUTCOME_VALIDATOR_SCRIPT" || true
   "$SESSION_GUARD_SCRIPT" || true
   "$EMPTY_SPIN_GUARD_SCRIPT" || true
@@ -108,6 +111,7 @@ while true; do
   export IMPLEMENTATION_SYMPHONY_PID
   "$OWNERSHIP_SCRIPT" || true
   "$SYNC_SCRIPT" || true
+  "$BRANCH_BOOTSTRAP_SCRIPT" || true
   "$OUTCOME_VALIDATOR_SCRIPT" || true
   "$SESSION_GUARD_SCRIPT" || true
   "$EMPTY_SPIN_GUARD_SCRIPT" || true

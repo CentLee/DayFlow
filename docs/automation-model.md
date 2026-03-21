@@ -17,6 +17,7 @@ Automatic:
 - PR-to-Linear state reconciliation
 - review finding to draft / `Todo` reconciliation
 - active workspace ownership to `In Progress` reconciliation
+- issue branch bootstrap for fresh `Todo` workspaces that are still on `develop`
 - post-run outcome validation for stale in-progress work without PR closure
 - proof-of-work refresh for open develop-targeted PRs
 - branch-bootstrap stall recovery for fresh workspaces that never leave `develop`
@@ -166,6 +167,7 @@ Automation scripts:
 - `scripts/sync_linear_pr_states.sh`
 - `scripts/reconcile_issue_ownership.sh`
 - `scripts/reconcile_review_feedback.sh`
+- `scripts/bootstrap_issue_branches.sh`
 - `scripts/validate_issue_outcomes.sh`
 - `scripts/guard_branch_bootstrap_stalls.sh`
 - `scripts/collect_pr_proof.sh`
