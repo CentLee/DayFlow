@@ -136,6 +136,7 @@ Recovery:
 - move the stale workspace aside
 - keep the supervisor alive
 - retry from a fresh workspace
+- stale workspaces must not count as active ownership on later reconciliation passes
 
 Guard:
 
