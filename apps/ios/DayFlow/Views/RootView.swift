@@ -249,7 +249,30 @@ struct BudgetBoardView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    if appStore.budgetStore.isLoading {
+                    if let board = appStore.budgetStore.board {
+                        if let errorMessage = appStore.budgetStore.errorMessage {
+                            ErrorBanner(message: errorMessage)
+                        }
+                        if appStore.budgetStore.isLoading {
+                            ProgressView("예산 보드를 새로 불러오는 중입니다")
+                                .frame(maxWidth: .infinity, alignment: .center)
+                        }
+                        BudgetStatusBar(
+                            monthKey: board.month.monthKey,
+                            saveState: appStore.budgetStore.saveState,
+                            lastSavedAt: appStore.budgetStore.lastSavedAt,
+                            isSaving: appStore.budgetStore.isSaving,
+                            canSave: appStore.budgetStore.saveState == "dirty"
+                        ) {
+                            Task {
+                                await appStore.budgetStore.save()
+                            }
+                        }
+                        KPICards(board: board)
+                        FixedItemsSection(items: board.fixedItems)
+                        VariableBucketsSection(buckets: board.variableBuckets)
+                        BillingRemindersSection(reminders: board.billingReminders)
+                    } else if appStore.budgetStore.isLoading {
                         ProgressView("예산 보드를 불러오는 중입니다")
                             .frame(maxWidth: .infinity, alignment: .center)
                     } else if let errorMessage = appStore.budgetStore.errorMessage {
@@ -257,16 +280,6 @@ struct BudgetBoardView: View {
                             ErrorBanner(message: errorMessage)
                             retryButton
                         }
-                    } else if let board = appStore.budgetStore.board {
-                        BudgetStatusBar(
-                            monthKey: board.month.monthKey,
-                            saveState: appStore.budgetStore.saveState,
-                            lastSavedAt: appStore.budgetStore.lastSavedAt
-                        )
-                        KPICards(board: board)
-                        FixedItemsSection(items: board.fixedItems)
-                        VariableBucketsSection(buckets: board.variableBuckets)
-                        BillingRemindersSection(reminders: board.billingReminders)
                     } else {
                         VStack(alignment: .leading, spacing: 12) {
                             ContentUnavailableView("예산 보드가 없습니다", systemImage: "chart.bar.doc.horizontal")
@@ -286,7 +299,7 @@ struct BudgetBoardView: View {
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
-                    .disabled(appStore.budgetStore.isLoading || appStore.budgetStore.monthKey == nil)
+                    .disabled(appStore.budgetStore.isLoading || appStore.budgetStore.isSaving || appStore.budgetStore.monthKey == nil)
                 }
             }
         }
@@ -310,14 +323,27 @@ private struct BudgetStatusBar: View {
     let monthKey: String
     let saveState: String
     let lastSavedAt: Date?
+    let isSaving: Bool
+    let canSave: Bool
+    let onSave: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("\(monthKey) live board")
-                .font(.headline)
-            Text(statusMessage)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("\(monthKey) 월간 보드")
+                    .font(.headline)
+                Text(statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button("저장") {
+                onSave()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!canSave || isSaving)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
@@ -334,8 +360,10 @@ private struct BudgetStatusBar: View {
             return "서버와 동기화됨"
         case "dirty":
             return "변경 사항이 아직 저장되지 않았습니다."
+        case "saving":
+            return "변경 사항을 저장하는 중입니다."
         case "error":
-            return "API 오류로 최신 상태를 불러오지 못했습니다."
+            return "저장에 실패해 마지막 저장본으로 복원했습니다."
         default:
             return "실시간 예산 데이터를 준비 중입니다."
         }
@@ -381,24 +409,82 @@ private struct FixedItemsSection: View {
             Text("고정비")
                 .font(.headline)
             ForEach(items) { item in
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(item.name)
-                        if let billing = item.billingDayLabel {
-                            Text(billing)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer()
-                    Toggle("", isOn: .constant(item.enabled))
-                        .labelsHidden()
-                    Text("\(item.amount)")
-                        .monospacedDigit()
-                }
-                .padding(.vertical, 4)
+                FixedItemRow(item: item)
             }
         }
+    }
+}
+
+private struct FixedItemRow: View {
+    @Environment(AppStore.self) private var appStore
+    @FocusState private var isAmountFieldFocused: Bool
+
+    let item: BudgetItem
+    @State private var amountText: String
+
+    init(item: BudgetItem) {
+        self.item = item
+        _amountText = State(initialValue: "\(item.amount)")
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Toggle("", isOn: enabledBinding)
+                .labelsHidden()
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.name)
+                if let billing = item.billingDayLabel {
+                    Text(billing)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+
+            TextField("금액", text: $amountText)
+                .keyboardType(.numberPad)
+                .multilineTextAlignment(.trailing)
+                .monospacedDigit()
+                .frame(width: 88)
+                .textFieldStyle(.roundedBorder)
+                .focused($isAmountFieldFocused)
+                .onChange(of: amountText) { _, newValue in
+                    let digits = newValue.filter { $0.isNumber }
+                    if digits != newValue {
+                        amountText = digits
+                        return
+                    }
+
+                    let amount = Int(digits) ?? 0
+                    appStore.budgetStore.updateFixedItemAmount(item.id, amount: amount)
+                }
+                .onChange(of: item.amount) { _, newValue in
+                    let nextValue = "\(newValue)"
+                    if !isAmountFieldFocused {
+                        amountText = nextValue
+                    } else if !amountText.isEmpty, amountText != nextValue {
+                        amountText = nextValue
+                    }
+                }
+                .onChange(of: isAmountFieldFocused) { _, isFocused in
+                    if !isFocused {
+                        amountText = "\(item.amount)"
+                    }
+                }
+        }
+        .padding(.vertical, 4)
+        .opacity(item.enabled ? 1 : 0.7)
+    }
+
+    private var enabledBinding: Binding<Bool> {
+        Binding(
+            get: { item.enabled },
+            set: { isEnabled in
+                appStore.budgetStore.setFixedItemEnabled(item.id, isEnabled: isEnabled)
+            }
+        )
     }
 }
 
