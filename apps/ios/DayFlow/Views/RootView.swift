@@ -262,7 +262,8 @@ struct BudgetBoardView: View {
                             saveState: appStore.budgetStore.saveState,
                             lastSavedAt: appStore.budgetStore.lastSavedAt,
                             isSaving: appStore.budgetStore.isSaving,
-                            canSave: appStore.budgetStore.saveState == "dirty"
+                            canSave: appStore.budgetStore.canPersistChanges,
+                            actionTitle: appStore.budgetStore.persistActionTitle
                         ) {
                             Task {
                                 await appStore.budgetStore.save()
@@ -325,21 +326,27 @@ private struct BudgetStatusBar: View {
     let lastSavedAt: Date?
     let isSaving: Bool
     let canSave: Bool
+    let actionTitle: String
     let onSave: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("\(monthKey) 월간 보드")
-                    .font(.headline)
+                Label {
+                    Text("\(monthKey) 월간 보드")
+                        .font(.headline)
+                } icon: {
+                    Image(systemName: statusIconName)
+                        .foregroundStyle(statusColor)
+                }
                 Text(statusMessage)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(statusColor)
             }
 
             Spacer()
 
-            Button("저장") {
+            Button(actionTitle) {
                 onSave()
             }
             .buttonStyle(.borderedProminent)
@@ -363,9 +370,39 @@ private struct BudgetStatusBar: View {
         case "saving":
             return "변경 사항을 저장하는 중입니다."
         case "error":
-            return "저장에 실패해 마지막 저장본으로 복원했습니다."
+            return "저장에 실패해 마지막 저장본으로 복원했습니다. 다시 시도할 수 있습니다."
         default:
             return "실시간 예산 데이터를 준비 중입니다."
+        }
+    }
+
+    private var statusIconName: String {
+        switch saveState {
+        case "synced":
+            return "checkmark.circle.fill"
+        case "dirty":
+            return "pencil.circle.fill"
+        case "saving":
+            return "arrow.triangle.2.circlepath.circle.fill"
+        case "error":
+            return "exclamationmark.triangle.fill"
+        default:
+            return "clock.fill"
+        }
+    }
+
+    private var statusColor: Color {
+        switch saveState {
+        case "synced":
+            return .secondary
+        case "dirty":
+            return .orange
+        case "saving":
+            return .blue
+        case "error":
+            return .red
+        default:
+            return .secondary
         }
     }
 }
@@ -496,22 +533,103 @@ private struct VariableBucketsSection: View {
             Text("변동 버킷")
                 .font(.headline)
             ForEach(buckets) { bucket in
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(bucket.name)
-                    Text("예산 \(bucket.plannedAmount) / 사용 \(bucket.actualAmount)")
-                        .font(.subheadline)
-                    if let hint = bucket.formulaHint {
-                        Text(hint)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-                .background(Color(.secondarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 16))
+                VariableBucketRow(bucket: bucket)
             }
         }
+    }
+}
+
+private struct VariableBucketRow: View {
+    @Environment(AppStore.self) private var appStore
+    @State private var plannedAmountText = ""
+    @State private var actualAmountText = ""
+    @FocusState private var focusedField: Field?
+
+    let bucket: BudgetBucket
+
+    private enum Field {
+        case planned
+        case actual
+    }
+
+    init(bucket: BudgetBucket) {
+        self.bucket = bucket
+        _plannedAmountText = State(initialValue: "\(bucket.plannedAmount)")
+        _actualAmountText = State(initialValue: "\(bucket.actualAmount)")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(bucket.name)
+                .font(.subheadline.weight(.semibold))
+
+            HStack(spacing: 12) {
+                amountField(title: "예산", text: $plannedAmountText, field: .planned)
+                amountField(title: "사용", text: $actualAmountText, field: .actual)
+            }
+
+            if let hint = bucket.formulaHint {
+                Text(hint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(Color(.secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .onChange(of: bucket.plannedAmount) { _, newValue in
+            let nextValue = "\(newValue)"
+            if focusedField != .planned {
+                plannedAmountText = nextValue
+            } else if !plannedAmountText.isEmpty, plannedAmountText != nextValue {
+                plannedAmountText = nextValue
+            }
+        }
+        .onChange(of: bucket.actualAmount) { _, newValue in
+            let nextValue = "\(newValue)"
+            if focusedField != .actual {
+                actualAmountText = nextValue
+            } else if !actualAmountText.isEmpty, actualAmountText != nextValue {
+                actualAmountText = nextValue
+            }
+        }
+        .onChange(of: focusedField) { _, newValue in
+            guard newValue == nil else { return }
+            plannedAmountText = "\(bucket.plannedAmount)"
+            actualAmountText = "\(bucket.actualAmount)"
+        }
+    }
+
+    private func amountField(title: String, text: Binding<String>, field: Field) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextField(title, text: text)
+                .keyboardType(.numberPad)
+                .multilineTextAlignment(.trailing)
+                .monospacedDigit()
+                .textFieldStyle(.roundedBorder)
+                .focused($focusedField, equals: field)
+                .onChange(of: text.wrappedValue) { _, newValue in
+                    let digits = newValue.filter { $0.isNumber }
+                    if digits != newValue {
+                        text.wrappedValue = digits
+                        return
+                    }
+
+                    let amount = Int(digits) ?? 0
+                    switch field {
+                    case .planned:
+                        appStore.budgetStore.updateVariableBucketPlannedAmount(bucket.id, amount: amount)
+                    case .actual:
+                        appStore.budgetStore.updateVariableBucketActualAmount(bucket.id, amount: amount)
+                    }
+                }
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 

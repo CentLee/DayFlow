@@ -238,6 +238,38 @@ struct AppStoreTests {
     }
 
     @Test
+    func variableBucketEditMarksBoardDirtyAndRecalculatesKpis() async throws {
+        let apiClient = StubAPIClient()
+        let appStore = AppStore(apiClient: apiClient)
+
+        try await appStore.budgetStore.load(monthKey: "2026-03")
+        appStore.budgetStore.updateVariableBucketPlannedAmount("bkt_001", amount: 20)
+        appStore.budgetStore.updateVariableBucketActualAmount("bkt_001", amount: 7)
+
+        #expect(appStore.budgetStore.board?.variableBuckets.first?.plannedAmount == 20)
+        #expect(appStore.budgetStore.board?.variableBuckets.first?.actualAmount == 7)
+        #expect(appStore.budgetStore.board?.summary.variableBucketTotal == 20)
+        #expect(appStore.budgetStore.board?.summary.freeCashAmount == -42)
+        #expect(appStore.budgetStore.board?.month.remainingBudgetAmount == 137)
+        #expect(appStore.budgetStore.saveState == "dirty")
+    }
+
+    @Test
+    func revertingVariableBucketEditsReturnsBoardToSyncedState() async throws {
+        let apiClient = StubAPIClient()
+        let appStore = AppStore(apiClient: apiClient)
+
+        try await appStore.budgetStore.load(monthKey: "2026-03")
+
+        appStore.budgetStore.updateVariableBucketPlannedAmount("bkt_001", amount: 20)
+        #expect(appStore.budgetStore.saveState == "dirty")
+
+        appStore.budgetStore.updateVariableBucketPlannedAmount("bkt_001", amount: 12)
+        #expect(appStore.budgetStore.board == .sample(monthKey: "2026-03"))
+        #expect(appStore.budgetStore.saveState == "synced")
+    }
+
+    @Test
     func budgetSavePersistsEditedBoardAndReturnsSyncedState() async throws {
         let apiClient = StubAPIClient()
         let appStore = AppStore(apiClient: apiClient)
@@ -281,9 +313,118 @@ struct AppStoreTests {
         await appStore.budgetStore.save()
 
         #expect(appStore.budgetStore.saveState == "error")
-        #expect(appStore.budgetStore.errorMessage == "저장에 실패해 마지막 저장본으로 복원했습니다.")
+        #expect(appStore.budgetStore.errorMessage == "저장에 실패해 마지막 저장본으로 복원했습니다. 다시 시도할 수 있습니다.")
         #expect(appStore.budgetStore.board?.fixedItems.first?.enabled == originalBoard?.fixedItems.first?.enabled)
         #expect(appStore.budgetStore.board?.summary.fixedCostTotal == originalBoard?.summary.fixedCostTotal)
+    }
+
+    @Test
+    func budgetRetryResubmitsFailedBoardAfterRollback() async throws {
+        let apiClient = StubAPIClient()
+        let appStore = AppStore(apiClient: apiClient)
+
+        try await appStore.budgetStore.load(monthKey: "2026-03")
+        appStore.budgetStore.updateVariableBucketPlannedAmount("bkt_001", amount: 20)
+        appStore.budgetStore.updateVariableBucketActualAmount("bkt_001", amount: 7)
+
+        let saveAttempts = AttemptCounter()
+        apiClient.saveBudgetHandler = { _, board in
+            let currentAttempt = await saveAttempts.increment()
+            if currentAttempt == 1 {
+                throw APIClientError.server("save failed")
+            }
+
+            #expect(board.variableBuckets.first?.plannedAmount == 20)
+            #expect(board.variableBuckets.first?.actualAmount == 7)
+            #expect(board.summary.variableBucketTotal == 20)
+            #expect(board.summary.freeCashAmount == -42)
+            #expect(board.month.remainingBudgetAmount == 137)
+            return board
+        }
+
+        await appStore.budgetStore.save()
+
+        #expect(appStore.budgetStore.saveState == "error")
+        #expect(appStore.budgetStore.board == .sample(monthKey: "2026-03"))
+        #expect(appStore.budgetStore.canPersistChanges)
+        #expect(appStore.budgetStore.persistActionTitle == "다시 시도")
+
+        await appStore.budgetStore.save()
+
+        #expect(await saveAttempts.value == 2)
+        #expect(appStore.budgetStore.saveState == "synced")
+        #expect(appStore.budgetStore.board?.variableBuckets.first?.plannedAmount == 20)
+        #expect(appStore.budgetStore.board?.variableBuckets.first?.actualAmount == 7)
+        #expect(appStore.budgetStore.persistActionTitle == "저장")
+    }
+
+    @Test
+    func budgetEditAfterFailureClearsRetryStateAndSavesLatestBoard() async throws {
+        let apiClient = StubAPIClient()
+        let appStore = AppStore(apiClient: apiClient)
+
+        try await appStore.budgetStore.load(monthKey: "2026-03")
+        appStore.budgetStore.updateVariableBucketPlannedAmount("bkt_001", amount: 20)
+
+        apiClient.saveBudgetHandler = { _, _ in
+            throw APIClientError.server("save failed")
+        }
+
+        await appStore.budgetStore.save()
+
+        #expect(appStore.budgetStore.saveState == "error")
+        #expect(appStore.budgetStore.persistActionTitle == "다시 시도")
+
+        appStore.budgetStore.updateVariableBucketActualAmount("bkt_001", amount: 9)
+
+        #expect(appStore.budgetStore.saveState == "dirty")
+        #expect(appStore.budgetStore.persistActionTitle == "저장")
+
+        apiClient.saveBudgetHandler = { _, board in
+            #expect(board.variableBuckets.first?.plannedAmount == 12)
+            #expect(board.variableBuckets.first?.actualAmount == 9)
+            #expect(board.summary.variableBucketTotal == 12)
+            #expect(board.summary.freeCashAmount == -44)
+            #expect(board.month.remainingBudgetAmount == 145)
+            return board
+        }
+
+        await appStore.budgetStore.save()
+
+        #expect(appStore.budgetStore.saveState == "synced")
+        #expect(appStore.budgetStore.board?.variableBuckets.first?.plannedAmount == 12)
+        #expect(appStore.budgetStore.board?.variableBuckets.first?.actualAmount == 9)
+    }
+
+    @Test
+    func budgetReloadFailurePreservesRetryStateAfterRollback() async throws {
+        let apiClient = StubAPIClient()
+        let appStore = AppStore(apiClient: apiClient)
+
+        try await appStore.budgetStore.load(monthKey: "2026-03")
+        appStore.budgetStore.updateVariableBucketPlannedAmount("bkt_001", amount: 20)
+
+        apiClient.saveBudgetHandler = { _, _ in
+            throw APIClientError.server("save failed")
+        }
+
+        await appStore.budgetStore.save()
+
+        #expect(appStore.budgetStore.saveState == "error")
+        #expect(appStore.budgetStore.canPersistChanges)
+        #expect(appStore.budgetStore.persistActionTitle == "다시 시도")
+
+        apiClient.fetchBudgetHandler = { _ in
+            throw APIClientError.server("reload failed")
+        }
+
+        await appStore.budgetStore.reload()
+
+        #expect(appStore.budgetStore.errorMessage == "reload failed")
+        #expect(appStore.budgetStore.saveState == "error")
+        #expect(appStore.budgetStore.canPersistChanges)
+        #expect(appStore.budgetStore.persistActionTitle == "다시 시도")
+        #expect(appStore.budgetStore.board == .sample(monthKey: "2026-03"))
     }
 
     @Test
@@ -323,6 +464,15 @@ struct AppStoreTests {
         appStore.showLogin()
         #expect(appStore.authScreen == .login)
         #expect(appStore.authErrorMessage == nil)
+    }
+}
+
+private actor AttemptCounter {
+    private(set) var value = 0
+
+    func increment() -> Int {
+        value += 1
+        return value
     }
 }
 

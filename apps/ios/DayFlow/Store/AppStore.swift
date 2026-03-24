@@ -212,6 +212,7 @@ final class BudgetStore {
     var saveState: String = "idle"
     private let apiClient: APIClientProtocol
     private var lastConfirmedBoard: BudgetBoardResponse?
+    private var retryBoard: BudgetBoardResponse?
 
     init(apiClient: APIClientProtocol) {
         self.apiClient = apiClient
@@ -228,15 +229,20 @@ final class BudgetStore {
         do {
             board = try await apiClient.fetchBudget(monthKey: monthKey)
             lastConfirmedBoard = board
+            retryBoard = nil
             lastSavedAt = Date()
             saveState = "synced"
         } catch {
             if let previousBoard, previousBoard.month.monthKey == monthKey {
                 board = previousBoard
-                saveState = previousBoard == lastConfirmedBoard ? "synced" : "dirty"
+                if retryBoard != nil {
+                    saveState = "error"
+                } else {
+                    saveState = previousBoard == lastConfirmedBoard ? "synced" : "dirty"
+                }
             } else if let lastConfirmedBoard, lastConfirmedBoard.month.monthKey == monthKey {
                 board = lastConfirmedBoard
-                saveState = "synced"
+                saveState = retryBoard == nil ? "synced" : "error"
             } else {
                 board = nil
                 saveState = "error"
@@ -282,8 +288,49 @@ final class BudgetStore {
     }
 
     @MainActor
+    func updateVariableBucketPlannedAmount(_ bucketID: String, amount: Int) {
+        let sanitizedAmount = max(0, amount)
+
+        updateBoard { board in
+            guard let index = board.variableBuckets.firstIndex(where: { $0.id == bucketID }) else { return false }
+            guard board.variableBuckets[index].plannedAmount != sanitizedAmount else { return false }
+            board.variableBuckets[index].plannedAmount = sanitizedAmount
+            return true
+        }
+    }
+
+    @MainActor
+    func updateVariableBucketActualAmount(_ bucketID: String, amount: Int) {
+        let sanitizedAmount = max(0, amount)
+
+        updateBoard { board in
+            guard let index = board.variableBuckets.firstIndex(where: { $0.id == bucketID }) else { return false }
+            guard board.variableBuckets[index].actualAmount != sanitizedAmount else { return false }
+            board.variableBuckets[index].actualAmount = sanitizedAmount
+            return true
+        }
+    }
+
+    var canPersistChanges: Bool {
+        if isSaving {
+            return false
+        }
+        return saveState == "dirty" || retryBoard != nil
+    }
+
+    var persistActionTitle: String {
+        retryBoard == nil ? "저장" : "다시 시도"
+    }
+
+    @MainActor
     func save() async {
-        guard let monthKey, let currentBoard = board else {
+        guard let monthKey else {
+            errorMessage = "저장할 예산 보드가 없습니다."
+            saveState = "error"
+            return
+        }
+
+        guard let boardToSave = retryBoard ?? board else {
             errorMessage = "저장할 예산 보드가 없습니다."
             saveState = "error"
             return
@@ -295,14 +342,16 @@ final class BudgetStore {
         defer { isSaving = false }
 
         do {
-            let savedBoard = try await apiClient.saveBudget(monthKey: monthKey, board: currentBoard)
+            let savedBoard = try await apiClient.saveBudget(monthKey: monthKey, board: boardToSave)
             board = savedBoard
             lastConfirmedBoard = savedBoard
+            retryBoard = nil
             lastSavedAt = Date()
             saveState = "synced"
         } catch {
             board = lastConfirmedBoard
-            errorMessage = "저장에 실패해 마지막 저장본으로 복원했습니다."
+            retryBoard = boardToSave
+            errorMessage = "저장에 실패해 마지막 저장본으로 복원했습니다. 다시 시도할 수 있습니다."
             saveState = "error"
         }
     }
@@ -315,6 +364,7 @@ final class BudgetStore {
         errorMessage = nil
         lastSavedAt = nil
         lastConfirmedBoard = nil
+        retryBoard = nil
         saveState = "idle"
     }
 
@@ -332,6 +382,7 @@ final class BudgetStore {
 
         board.recalculateDerivedValues()
         self.board = board
+        retryBoard = nil
         errorMessage = nil
         saveState = board == lastConfirmedBoard ? "synced" : "dirty"
     }
