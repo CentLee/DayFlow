@@ -206,10 +206,12 @@ final class BudgetStore {
     var board: BudgetBoardResponse?
     var monthKey: String?
     var isLoading = false
+    var isSaving = false
     var errorMessage: String?
     var lastSavedAt: Date?
     var saveState: String = "idle"
     private let apiClient: APIClientProtocol
+    private var lastConfirmedBoard: BudgetBoardResponse?
 
     init(apiClient: APIClientProtocol) {
         self.apiClient = apiClient
@@ -217,6 +219,7 @@ final class BudgetStore {
 
     @MainActor
     func load(monthKey: String) async throws {
+        let previousBoard = board
         self.monthKey = monthKey
         isLoading = true
         errorMessage = nil
@@ -224,11 +227,20 @@ final class BudgetStore {
 
         do {
             board = try await apiClient.fetchBudget(monthKey: monthKey)
+            lastConfirmedBoard = board
             lastSavedAt = Date()
             saveState = "synced"
         } catch {
-            board = nil
-            saveState = "error"
+            if let previousBoard, previousBoard.month.monthKey == monthKey {
+                board = previousBoard
+                saveState = previousBoard == lastConfirmedBoard ? "synced" : "dirty"
+            } else if let lastConfirmedBoard, lastConfirmedBoard.month.monthKey == monthKey {
+                board = lastConfirmedBoard
+                saveState = "synced"
+            } else {
+                board = nil
+                saveState = "error"
+            }
             throw error
         }
     }
@@ -248,20 +260,61 @@ final class BudgetStore {
     }
 
     @MainActor
-    func toggleFixedItem(_ itemID: String) {
-        guard var board else { return }
-        guard let index = board.fixedItems.firstIndex(where: { $0.id == itemID }) else { return }
-        board.fixedItems[index].enabled.toggle()
-        self.board = board
-        saveState = "dirty"
+    func setFixedItemEnabled(_ itemID: String, isEnabled: Bool) {
+        updateBoard { board in
+            guard let index = board.fixedItems.firstIndex(where: { $0.id == itemID }) else { return false }
+            guard board.fixedItems[index].enabled != isEnabled else { return false }
+            board.fixedItems[index].enabled = isEnabled
+            return true
+        }
+    }
+
+    @MainActor
+    func updateFixedItemAmount(_ itemID: String, amount: Int) {
+        let sanitizedAmount = max(0, amount)
+
+        updateBoard { board in
+            guard let index = board.fixedItems.firstIndex(where: { $0.id == itemID }) else { return false }
+            guard board.fixedItems[index].amount != sanitizedAmount else { return false }
+            board.fixedItems[index].amount = sanitizedAmount
+            return true
+        }
+    }
+
+    @MainActor
+    func save() async {
+        guard let monthKey, let currentBoard = board else {
+            errorMessage = "저장할 예산 보드가 없습니다."
+            saveState = "error"
+            return
+        }
+
+        isSaving = true
+        errorMessage = nil
+        saveState = "saving"
+        defer { isSaving = false }
+
+        do {
+            let savedBoard = try await apiClient.saveBudget(monthKey: monthKey, board: currentBoard)
+            board = savedBoard
+            lastConfirmedBoard = savedBoard
+            lastSavedAt = Date()
+            saveState = "synced"
+        } catch {
+            board = lastConfirmedBoard
+            errorMessage = "저장에 실패해 마지막 저장본으로 복원했습니다."
+            saveState = "error"
+        }
     }
 
     func reset() {
         board = nil
         monthKey = nil
         isLoading = false
+        isSaving = false
         errorMessage = nil
         lastSavedAt = nil
+        lastConfirmedBoard = nil
         saveState = "idle"
     }
 
@@ -270,5 +323,16 @@ final class BudgetStore {
             return description
         }
         return error.localizedDescription.isEmpty ? "예산 보드를 불러오지 못했습니다." : error.localizedDescription
+    }
+
+    @MainActor
+    private func updateBoard(_ mutation: (inout BudgetBoardResponse) -> Bool) {
+        guard var board else { return }
+        guard mutation(&board) else { return }
+
+        board.recalculateDerivedValues()
+        self.board = board
+        errorMessage = nil
+        saveState = board == lastConfirmedBoard ? "synced" : "dirty"
     }
 }

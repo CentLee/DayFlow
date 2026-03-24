@@ -7,6 +7,7 @@ protocol APIClientProtocol: Sendable {
     func register(email: String, displayName: String, password: String, inviteCode: String) async throws
     func fetchCurrentSession() async throws -> MeResponse
     func fetchBudget(monthKey: String) async throws -> BudgetBoardResponse
+    func saveBudget(monthKey: String, board: BudgetBoardResponse) async throws -> BudgetBoardResponse
     func clearSession()
 }
 
@@ -108,6 +109,10 @@ struct APIClient: APIClientProtocol, @unchecked Sendable {
 
     func fetchBudget(monthKey: String) async throws -> BudgetBoardResponse {
         try await send(path: "budget/months/\(monthKey)", method: "GET", requiresAuthorization: true)
+    }
+
+    func saveBudget(monthKey: String, board: BudgetBoardResponse) async throws -> BudgetBoardResponse {
+        try await send(path: "budget/months/\(monthKey)", method: "PUT", body: board, requiresAuthorization: true)
     }
 
     func clearSession() {

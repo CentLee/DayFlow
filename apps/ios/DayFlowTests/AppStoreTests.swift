@@ -161,6 +161,27 @@ struct AppStoreTests {
     }
 
     @Test
+    func budgetReloadFailureKeepsUnsavedInlineEdits() async throws {
+        let apiClient = StubAPIClient()
+        let appStore = AppStore(apiClient: apiClient)
+
+        try await appStore.budgetStore.load(monthKey: "2026-03")
+        appStore.budgetStore.setFixedItemEnabled("bitm_001", isEnabled: false)
+        let editedBoard = appStore.budgetStore.board
+
+        apiClient.fetchBudgetHandler = { monthKey in
+            #expect(monthKey == "2026-03")
+            throw APIClientError.server("reload failed")
+        }
+
+        await appStore.budgetStore.reload()
+
+        #expect(appStore.budgetStore.errorMessage == "reload failed")
+        #expect(appStore.budgetStore.board == editedBoard)
+        #expect(appStore.budgetStore.saveState == "dirty")
+    }
+
+    @Test
     func budgetReloadWithoutMonthKeyShowsError() async {
         let apiClient = StubAPIClient()
         let appStore = AppStore(apiClient: apiClient)
@@ -169,6 +190,121 @@ struct AppStoreTests {
 
         #expect(appStore.budgetStore.errorMessage == "불러올 월 정보가 없습니다.")
         #expect(appStore.budgetStore.saveState == "idle")
+    }
+
+    @Test
+    func fixedItemToggleMarksBoardDirtyAndRecalculatesKpis() async throws {
+        let apiClient = StubAPIClient()
+        let appStore = AppStore(apiClient: apiClient)
+
+        try await appStore.budgetStore.load(monthKey: "2026-03")
+        appStore.budgetStore.setFixedItemEnabled("bitm_001", isEnabled: false)
+
+        #expect(appStore.budgetStore.board?.fixedItems.first?.enabled == false)
+        #expect(appStore.budgetStore.board?.summary.fixedCostTotal == 132)
+        #expect(appStore.budgetStore.board?.summary.freeCashAmount == -14)
+        #expect(appStore.budgetStore.board?.month.remainingBudgetAmount == 166)
+        #expect(appStore.budgetStore.saveState == "dirty")
+    }
+
+    @Test
+    func fixedItemAmountEditMarksBoardDirtyAndRecalculatesKpis() async throws {
+        let apiClient = StubAPIClient()
+        let appStore = AppStore(apiClient: apiClient)
+
+        try await appStore.budgetStore.load(monthKey: "2026-03")
+        appStore.budgetStore.updateFixedItemAmount("bitm_002", amount: 40)
+
+        #expect(appStore.budgetStore.board?.fixedItems[1].amount == 40)
+        #expect(appStore.budgetStore.board?.summary.fixedCostTotal == 157)
+        #expect(appStore.budgetStore.board?.summary.freeCashAmount == -39)
+        #expect(appStore.budgetStore.board?.month.remainingBudgetAmount == 141)
+        #expect(appStore.budgetStore.saveState == "dirty")
+    }
+
+    @Test
+    func revertingFixedItemEditsReturnsBoardToSyncedState() async throws {
+        let apiClient = StubAPIClient()
+        let appStore = AppStore(apiClient: apiClient)
+
+        try await appStore.budgetStore.load(monthKey: "2026-03")
+
+        appStore.budgetStore.setFixedItemEnabled("bitm_001", isEnabled: false)
+        #expect(appStore.budgetStore.saveState == "dirty")
+
+        appStore.budgetStore.setFixedItemEnabled("bitm_001", isEnabled: true)
+        #expect(appStore.budgetStore.board == .sample(monthKey: "2026-03"))
+        #expect(appStore.budgetStore.saveState == "synced")
+    }
+
+    @Test
+    func budgetSavePersistsEditedBoardAndReturnsSyncedState() async throws {
+        let apiClient = StubAPIClient()
+        let appStore = AppStore(apiClient: apiClient)
+
+        try await appStore.budgetStore.load(monthKey: "2026-03")
+        appStore.budgetStore.setFixedItemEnabled("bitm_001", isEnabled: false)
+        appStore.budgetStore.updateFixedItemAmount("bitm_002", amount: 40)
+
+        apiClient.saveBudgetHandler = { monthKey, board in
+            #expect(monthKey == "2026-03")
+            #expect(board.fixedItems.first?.enabled == false)
+            #expect(board.fixedItems[1].amount == 40)
+            #expect(board.summary.fixedCostTotal == 136)
+            #expect(board.summary.freeCashAmount == -18)
+            #expect(board.month.remainingBudgetAmount == 162)
+            return board
+        }
+
+        await appStore.budgetStore.save()
+
+        #expect(appStore.budgetStore.saveState == "synced")
+        #expect(appStore.budgetStore.errorMessage == nil)
+        #expect(appStore.budgetStore.lastSavedAt != nil)
+        #expect(appStore.budgetStore.board?.fixedItems.first?.enabled == false)
+        #expect(appStore.budgetStore.board?.fixedItems[1].amount == 40)
+    }
+
+    @Test
+    func budgetSaveFailureRestoresLastConfirmedBoard() async throws {
+        let apiClient = StubAPIClient()
+        let appStore = AppStore(apiClient: apiClient)
+
+        try await appStore.budgetStore.load(monthKey: "2026-03")
+        let originalBoard = appStore.budgetStore.board
+        appStore.budgetStore.setFixedItemEnabled("bitm_001", isEnabled: false)
+
+        apiClient.saveBudgetHandler = { _, _ in
+            throw APIClientError.server("save failed")
+        }
+
+        await appStore.budgetStore.save()
+
+        #expect(appStore.budgetStore.saveState == "error")
+        #expect(appStore.budgetStore.errorMessage == "저장에 실패해 마지막 저장본으로 복원했습니다.")
+        #expect(appStore.budgetStore.board?.fixedItems.first?.enabled == originalBoard?.fixedItems.first?.enabled)
+        #expect(appStore.budgetStore.board?.summary.fixedCostTotal == originalBoard?.summary.fixedCostTotal)
+    }
+
+    @Test
+    func budgetLoadFailureForDifferentMonthDoesNotReuseOldBoard() async throws {
+        let apiClient = StubAPIClient()
+        let appStore = AppStore(apiClient: apiClient)
+
+        try await appStore.budgetStore.load(monthKey: "2026-03")
+
+        apiClient.fetchBudgetHandler = { monthKey in
+            #expect(monthKey == "2026-04")
+            throw APIClientError.server("load failed")
+        }
+
+        await #expect(throws: APIClientError.server("load failed")) {
+            try await appStore.budgetStore.load(monthKey: "2026-04")
+        }
+
+        #expect(appStore.budgetStore.monthKey == "2026-04")
+        #expect(appStore.budgetStore.board == nil)
+        #expect(appStore.budgetStore.saveState == "error")
     }
 
     @Test
@@ -200,6 +336,7 @@ private final class StubAPIClient: APIClientProtocol, @unchecked Sendable {
     var registerHandler: (@Sendable (String, String, String, String) async throws -> Void)?
     var fetchCurrentSessionHandler: (@Sendable () async throws -> MeResponse)?
     var fetchBudgetHandler: (@Sendable (String) async throws -> BudgetBoardResponse)?
+    var saveBudgetHandler: (@Sendable (String, BudgetBoardResponse) async throws -> BudgetBoardResponse)?
 
     func login(email: String, password: String) async throws {
         loginCalls += 1
@@ -228,6 +365,14 @@ private final class StubAPIClient: APIClientProtocol, @unchecked Sendable {
             return try await fetchBudgetHandler(monthKey)
         }
         return budgetBoard ?? .sample(monthKey: monthKey)
+    }
+
+    func saveBudget(monthKey: String, board: BudgetBoardResponse) async throws -> BudgetBoardResponse {
+        if let saveBudgetHandler {
+            return try await saveBudgetHandler(monthKey, board)
+        }
+        budgetBoard = board
+        return board
     }
 
     func clearSession() {
