@@ -15,16 +15,19 @@ workspace:
   root: /Users/kakao_ent/Documents/DayFlow/.symphony/workspaces
 hooks:
   after_create: |
-    git clone --branch develop --single-branch https://github.com/CentLee/DayFlow.git .
+    git clone --depth 1 --branch develop --single-branch https://github.com/CentLee/DayFlow.git .
     git submodule update --init --recursive
   before_remove: |
     rm -rf .git
 agent:
   max_concurrent_agents: 1
-  max_turns: 20
+  max_turns: 5
 codex:
   command: env GH_CONFIG_DIR=/Users/kakao_ent/Documents/DayFlow/.symphony/gh codex app-server
   approval_policy: never
+  turn_timeout_ms: 420000
+  read_timeout_ms: 5000
+  stall_timeout_ms: 90000
   thread_sandbox: dangerFullAccess
   turn_sandbox_policy:
     mode: dangerFullAccess
@@ -70,6 +73,8 @@ Execution rules:
 12. Every PR must satisfy the review checklist in `docs/review-checklist.md`.
 13. Final reporting should contain completed work, tests run, blockers, proof-of-work, and any review feedback addressed in this round.
 14. The orchestration guardrail may promote an owned workspace from `Todo` to `In Progress` before the first PR exists. `Todo` is the only runnable queue state, so use it again only when the issue should be retried.
+15. Ignore generated artifacts such as `build/`, `DerivedData`, and `*.xcodeproj` unless the issue explicitly requires touching generated project files.
+16. Prefer source-file edits first; do not run heavy Xcode or simulator commands until the source diff is ready for validation.
 
 Routing guide:
 

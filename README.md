@@ -91,6 +91,7 @@ Additional operating docs:
 
 - `docs/automation-model.md`
 - `docs/iteration-queue.md`
+- `docs/iteration-3-review.md`
 - `docs/review-checklist.md`
 - `docs/github-local-auth.md`
 
