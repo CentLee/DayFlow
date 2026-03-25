@@ -35,6 +35,18 @@ This repository uses a minimal local Symphony workflow modeled after the officia
 8. The assigned primary agent keeps ownership through review follow-up until the PR is merge-ready.
 9. Results are returned through branch, PR, CI status, and proof-of-work summary.
 
+## Token Budget Defaults
+
+DayFlow does not use the upstream default token posture unchanged. The local workflow keeps the agent budget tighter:
+
+- shallow clone in `after_create`
+- `agent.max_turns: 5`
+- `codex.turn_timeout_ms: 420000`
+- `codex.stall_timeout_ms: 90000`
+- generated iOS build artifacts are excluded from normal issue work unless the issue explicitly targets them
+
+These values are based on the official Symphony configuration surface in the README and SPEC, but tuned more aggressively for local-first MVP work.
+
 ## DayFlow State Machine
 
 Current Linear workspace does not have a dedicated `Ready` state yet, so DayFlow currently uses:

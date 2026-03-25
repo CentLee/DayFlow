@@ -21,6 +21,7 @@ Automatic:
 - post-run outcome validation for stale in-progress work without PR closure
 - proof-of-work refresh for open develop-targeted PRs
 - branch-bootstrap stall recovery for fresh workspaces that never leave `develop`
+- low-token workflow defaults through shallow clone, reduced turn budget, and tighter stall/turn timeouts
 
 Manual:
 
@@ -173,6 +174,18 @@ Automation scripts:
 - `scripts/collect_pr_proof.sh`
 - `scripts/update_pr_proof.sh`
 - `scripts/run_symphony.sh`
+
+## Token Budget Controls
+
+DayFlow keeps Symphony on a tighter token budget than the upstream defaults:
+
+- shallow clone in `hooks.after_create`
+- `agent.max_turns` reduced from the upstream default of `20` to `5`
+- `codex.stall_timeout_ms` reduced from the upstream default of `300000` to `90000`
+- `codex.turn_timeout_ms` reduced from the upstream default of `3600000` to `420000`
+- generated build artifacts are treated as noise unless a task explicitly requires them
+
+These controls are intended to stop long, low-yield runs early and keep issue retries cheap.
 
 ## Branch and Workspace Naming
 
