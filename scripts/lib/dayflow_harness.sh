@@ -20,6 +20,7 @@ DAYFLOW_STATE_IN_REVIEW_ID="${DAYFLOW_STATE_IN_REVIEW_ID:-236d69db-9e92-476a-810
 DAYFLOW_STATE_DONE_ID="${DAYFLOW_STATE_DONE_ID:-43be38bf-b6b1-4d4d-a6c3-1c09978b25fd}"
 DAYFLOW_STATE_BLOCKED_ID="${DAYFLOW_STATE_BLOCKED_ID:-}"
 DAYFLOW_PAUSED_ISSUES_FILE="${DAYFLOW_PAUSED_ISSUES_FILE:-$ROOT_DIR/.symphony/artifacts/paused_issues.json}"
+DAYFLOW_MERGE_READY_NOTIFICATIONS_FILE="${DAYFLOW_MERGE_READY_NOTIFICATIONS_FILE:-$ROOT_DIR/.symphony/artifacts/merge_ready_notifications.json}"
 
 require_linear_api_key() {
   if [[ -z "${LINEAR_API_KEY:-}" ]]; then
@@ -36,6 +37,29 @@ require_cmds() {
       exit 1
     fi
   done
+}
+
+github_repo_slug() {
+  local slug
+
+  if [[ -n "${DAYFLOW_GITHUB_REPO_SLUG:-}" ]]; then
+    printf '%s\n' "$DAYFLOW_GITHUB_REPO_SLUG"
+    return 0
+  fi
+
+  slug=$(
+    git -C "$ROOT_DIR" remote get-url origin 2>/dev/null |
+      sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##'
+  )
+
+  if [[ -z "$slug" ]]; then
+    echo "unable to determine GitHub repository slug from origin remote" >&2
+    return 1
+  fi
+
+  DAYFLOW_GITHUB_REPO_SLUG="$slug"
+  export DAYFLOW_GITHUB_REPO_SLUG
+  printf '%s\n' "$DAYFLOW_GITHUB_REPO_SLUG"
 }
 
 linear_query() {
@@ -154,7 +178,10 @@ issue_branch_matches() {
 
 has_open_pr_for_branch() {
   local branch="$1"
-  GH_CONFIG_DIR="$GH_CONFIG_DIR" gh pr list --state open --limit 100 --json headRefName |
+  local repo_slug
+
+  repo_slug="$(github_repo_slug)"
+  GH_CONFIG_DIR="$GH_CONFIG_DIR" gh pr list -R "$repo_slug" --state open --limit 100 --json headRefName |
     jq -e --arg branch "$branch" '.[] | select(.headRefName == $branch)' >/dev/null
 }
 
@@ -205,6 +232,13 @@ ensure_paused_issues_store() {
   mkdir -p "$(dirname "$DAYFLOW_PAUSED_ISSUES_FILE")"
   if [[ ! -f "$DAYFLOW_PAUSED_ISSUES_FILE" ]]; then
     printf '{}\n' >"$DAYFLOW_PAUSED_ISSUES_FILE"
+  fi
+}
+
+ensure_merge_ready_notifications_store() {
+  mkdir -p "$(dirname "$DAYFLOW_MERGE_READY_NOTIFICATIONS_FILE")"
+  if [[ ! -f "$DAYFLOW_MERGE_READY_NOTIFICATIONS_FILE" ]]; then
+    printf '{}\n' >"$DAYFLOW_MERGE_READY_NOTIFICATIONS_FILE"
   fi
 }
 

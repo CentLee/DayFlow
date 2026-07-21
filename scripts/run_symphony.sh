@@ -11,6 +11,7 @@ SYNC_SCRIPT="$ROOT_DIR/scripts/sync_linear_pr_states.sh"
 OWNERSHIP_SCRIPT="$ROOT_DIR/scripts/reconcile_issue_ownership.sh"
 REVIEW_FEEDBACK_SCRIPT="$ROOT_DIR/scripts/reconcile_review_feedback.sh"
 PROOF_UPDATE_SCRIPT="$ROOT_DIR/scripts/update_pr_proof.sh"
+MERGE_READY_NOTIFICATION_SCRIPT="$ROOT_DIR/scripts/notify_merge_ready_prs.sh"
 BRANCH_BOOTSTRAP_SCRIPT="$ROOT_DIR/scripts/bootstrap_issue_branches.sh"
 SESSION_GUARD_SCRIPT="$ROOT_DIR/scripts/guard_issue_sessions.sh"
 OUTCOME_VALIDATOR_SCRIPT="$ROOT_DIR/scripts/validate_issue_outcomes.sh"
@@ -93,6 +94,7 @@ prelaunch_checks() {
   run_local_script "$REVIEW_FEEDBACK_SCRIPT"
   run_local_script "$BRANCH_BOOTSTRAP_SCRIPT"
   run_local_script "$PROOF_UPDATE_SCRIPT"
+  run_local_script "$MERGE_READY_NOTIFICATION_SCRIPT"
 
   outcome_output="$(bash "$OUTCOME_VALIDATOR_SCRIPT" 2>/dev/null || true)"
   if [[ -n "$outcome_output" ]]; then
@@ -137,6 +139,7 @@ sync_loop() {
     run_local_script "$REVIEW_FEEDBACK_SCRIPT"
     run_local_script "$BRANCH_BOOTSTRAP_SCRIPT"
     run_local_script "$PROOF_UPDATE_SCRIPT"
+    run_local_script "$MERGE_READY_NOTIFICATION_SCRIPT"
     outcome_output="$(bash "$OUTCOME_VALIDATOR_SCRIPT" 2>/dev/null || true)"
     if [[ -n "$outcome_output" ]]; then
       printf '%s\n' "$outcome_output"
