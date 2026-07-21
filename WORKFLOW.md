@@ -28,9 +28,9 @@ codex:
   turn_timeout_ms: 420000
   read_timeout_ms: 5000
   stall_timeout_ms: 90000
-  thread_sandbox: dangerFullAccess
+  thread_sandbox: danger-full-access
   turn_sandbox_policy:
-    mode: dangerFullAccess
+    type: dangerFullAccess
 server:
   port: 4100
 ---
@@ -62,7 +62,7 @@ Execution rules:
 
 1. Start with `WORKFLOW.md`, `docs/automation-model.md`, and the most relevant files under `docs/`.
 2. Read the relevant project skill before changing code.
-3. Before any file edit or commit, create or switch to an issue branch named `codex/<issue-id>-<short-slug>`.
+3. Before any file edit or commit, create or switch to an issue branch named `feature/tasks-<issue-number>-<short-slug>`.
 4. Never implement directly on `main` or `develop`.
 5. `main` is the release branch, `develop` is the integration branch, and all issue work starts from `develop`.
 6. Issue PRs target `develop` and should normally be squash-merged.

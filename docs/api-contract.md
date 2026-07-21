@@ -62,7 +62,7 @@ Response:
 
 ### `GET /me`
 
-Returns current user, owned calendars, shared calendars, and current budget month key.
+Returns current user, the default personal calendar, joined shared calendars, and current budget month key.
 
 Response:
 
@@ -73,20 +73,13 @@ Response:
     "email": "owner@dayflow.local",
     "display_name": "DayFlow Owner"
   },
-  "owned_calendars": [
-    {
-      "id": "cal_001",
-      "name": "Personal",
-      "color": "#1F6B5C",
-      "updated_at": "2026-03-17T00:00:00Z"
-    },
-    {
-      "id": "cal_002",
-      "name": "Shared Home",
-      "color": "#D8A21D",
-      "updated_at": "2026-03-17T00:00:00Z"
-    }
-  ],
+  "personal_calendar": {
+    "id": "cal_001",
+    "kind": "personal",
+    "name": "Personal",
+    "color": "#1F6B5C",
+    "updated_at": "2026-03-17T00:00:00Z"
+  },
   "shared_calendars": [],
   "current_budget_month_key": "2026-03"
 }
@@ -96,6 +89,7 @@ Notes:
 
 - auth responses stay minimal for MVP and do not inline calendar or budget payloads
 - `/me` is the bootstrap source for session user data and current month routing
+- `personal_calendar` is always singular in MVP and is automatically provisioned for each account
 - current memory mocks return the owner view above for the seeded owner account
 
 Invited collaborator example:
@@ -107,10 +101,17 @@ Invited collaborator example:
     "email": "user@example.com",
     "display_name": "Kakao"
   },
-  "owned_calendars": [],
+  "personal_calendar": {
+    "id": "cal_101",
+    "kind": "personal",
+    "name": "Personal",
+    "color": "#5B7FFF",
+    "updated_at": "2026-03-17T00:00:00Z"
+  },
   "shared_calendars": [
     {
       "id": "cal_002",
+      "kind": "shared",
       "name": "Shared Home",
       "color": "#D8A21D",
       "updated_at": "2026-03-17T00:00:00Z"
@@ -122,14 +123,14 @@ Invited collaborator example:
 
 Notes:
 
-- invited collaborators move shared calendars into `shared_calendars` and do not receive budget data
+- invited collaborators always keep their own personal calendar and do not receive budget data from anyone else
 - the collaborator example is the intended grouped shape for session bootstrap after invite registration/login
 
 ## Calendars
 
 ### `GET /calendars`
 
-Returns the current flat calendar list from the backend memory mock.
+Returns the current flat calendar list used for the shared calendar tab and calendar pickers.
 
 Response:
 
@@ -138,9 +139,11 @@ Response:
   "items": [
     {
       "id": "cal_001",
-      "name": "Personal",
-      "color": "#1F6B5C",
-      "updated_at": "2026-03-17T00:00:00Z"
+      "kind": "shared",
+      "name": "Shared Home",
+      "color": "#D8A21D",
+      "updated_at": "2026-03-17T00:00:00Z",
+      "membership_role": "owner"
     }
   ]
 }
@@ -148,19 +151,18 @@ Response:
 
 Notes:
 
-- the seeded owner mock currently returns only `owned_calendars` here
-- shared calendars for collaborators are documented in `/me` above and remain a follow-up for the flat `/calendars` mock
+- personal calendar bootstrap stays in `/me` and does not need to be duplicated in the shared calendar tab payload
 - the list stays budget-free even when a calendar is shared
 
 ### `POST /calendars`
 
-Creates a personal calendar.
+Creates a shared calendar.
 
 Request:
 
 ```json
 {
-  "name": "Trips",
+  "name": "Shared Home",
   "color": "#5B7FFF"
 }
 ```
@@ -170,7 +172,8 @@ Response:
 ```json
 {
   "id": "cal_003",
-  "name": "Trips",
+  "kind": "shared",
+  "name": "Shared Home",
   "color": "#5B7FFF",
   "updated_at": "2026-03-17T00:00:00Z"
 }
@@ -185,6 +188,7 @@ Request:
 ```json
 {
   "email": "friend@example.com",
+  "delivery_channel": "sms",
   "role": "editor"
 }
 ```
@@ -196,9 +200,51 @@ Response:
   "id": "cinv_123",
   "calendar_id": "cal_002",
   "email": "friend@example.com",
+  "delivery_channel": "sms",
   "role": "editor",
   "invite_code": "invite_abc",
+  "invite_url": "https://dayflow.local/invites/invite_abc",
   "updated_at": "2026-03-17T00:00:00Z"
+}
+```
+
+### `GET /invites/{invite_code}`
+
+Returns invite preview data for an emailed or texted link before acceptance.
+
+Response:
+
+```json
+{
+  "invite": {
+    "id": "cinv_123",
+    "calendar_id": "cal_002",
+    "calendar_name": "Shared Home",
+    "email": "friend@example.com",
+    "delivery_channel": "sms",
+    "role": "editor",
+    "invited_by_display_name": "DayFlow Owner",
+    "expires_at": "2026-03-24T00:00:00Z"
+  }
+}
+```
+
+### `POST /invites/{invite_code}/accept`
+
+Accepts an invite link for the authenticated user and adds membership to the shared calendar.
+
+Response:
+
+```json
+{
+  "calendar": {
+    "id": "cal_002",
+    "kind": "shared",
+    "name": "Shared Home",
+    "color": "#D8A21D",
+    "membership_role": "editor",
+    "updated_at": "2026-03-17T00:00:00Z"
+  }
 }
 ```
 
@@ -239,6 +285,37 @@ Request:
   "starts_at": "2026-03-25T09:00:00Z",
   "ends_at": "2026-03-25T09:30:00Z",
   "all_day": false
+}
+```
+
+### `POST /events/{id}/transfer`
+
+Copies or moves an event into a shared calendar without converting the personal calendar itself.
+
+Request:
+
+```json
+{
+  "target_calendar_id": "cal_002",
+  "mode": "copy"
+}
+```
+
+Response:
+
+```json
+{
+  "source_event_id": "evt_001",
+  "target_event": {
+    "id": "evt_101",
+    "calendar_id": "cal_002",
+    "title": "보험비 정산",
+    "notes": "25일 기준 확인",
+    "starts_at": "2026-03-25T09:00:00Z",
+    "ends_at": "2026-03-25T09:30:00Z",
+    "all_day": false,
+    "updated_at": "2026-03-17T00:00:00Z"
+  }
 }
 ```
 
@@ -443,4 +520,5 @@ Current MVP contract rules:
 - Budget responses are single-user scoped
 - The iOS client should be able to render the budget screen from one budget-month response
 - Auth and calendar payloads use snake_case JSON keys over the wire
-- `/me` returns grouped calendar bootstrap data, while `/calendars` returns the canonical flat list payload
+- `/me` returns grouped calendar bootstrap data, while `/calendars` returns the shared-calendar list payload
+- personal calendars are never shared directly; only shared calendars accept members

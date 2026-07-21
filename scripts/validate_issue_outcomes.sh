@@ -36,7 +36,7 @@ for workspace_dir in "$WORKSPACE_ROOT"/CEN-*; do
   [[ -n "$issue_id" && "$issue_id" != "null" ]] || continue
   [[ "$current_state" == "$DAYFLOW_STATE_IN_PROGRESS_NAME" ]] || continue
   [[ -n "$branch" ]] || continue
-  [[ "$branch" =~ ^codex/${issue_key}- ]] || continue
+  issue_branch_matches "$branch" "$issue_key" || continue
   has_open_pr_for_branch "$branch" && continue
 
   if [[ -n "$dirty" ]]; then

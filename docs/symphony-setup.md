@@ -94,7 +94,8 @@ The title should follow `[Agent] short task description`.
 
 ## Branch and Workspace Rules
 
-- branch format: `codex/<issue-id>-<short-slug>`
+- branch format: `feature/tasks-<issue-number>-<short-slug>` preferred
+- legacy `codex/<issue-number>-<short-slug>` and `codex/<issue-id>-<short-slug>` remain supported for compatibility
 - workspace format: `<workspace-root>/<issue-id>`
 - one Linear issue per branch
 - issue branches should be created from `develop`
@@ -139,4 +140,4 @@ Future target filter after adding more Linear states:
 - the vendored Symphony runtime is pinned through the forked submodule at `/Users/kakao_ent/Documents/DayFlow/vendor/symphony`
 - new workspaces must initialize submodules so the patched Symphony runtime is available
 - the vendored Symphony Elixir runtime under `/Users/kakao_ent/Documents/DayFlow/vendor/symphony/elixir` contains a local compatibility patch for the current `codex app-server` v2 schema
-- specifically, `thread/start` sandbox values are normalized to `readOnly`, `workspaceWrite`, `dangerFullAccess`, and the default `turn/start` sandbox policy uses `mode` plus snake_case keys expected by the local app-server schema
+- specifically, `thread/start` sandbox values should be passed as `read-only`, `workspace-write`, or `danger-full-access`, while `turn/start` sandbox policies should use a `type` field with app-server variants such as `workspaceWrite`, `readOnly`, or `dangerFullAccess`

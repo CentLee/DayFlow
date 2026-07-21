@@ -7,6 +7,7 @@ MAX_SESSION_MINUTES="${MAX_SESSION_MINUTES:-15}"
 MAX_UNTRACKED_MINUTES="${MAX_UNTRACKED_MINUTES:-8}"
 MAX_BRANCH_ONLY_STALL_MINUTES="${MAX_BRANCH_ONLY_STALL_MINUTES:-3}"
 MAX_TOKEN_TOTAL="${MAX_TOKEN_TOTAL:-120000}"
+MIN_ACTIVE_RUNTIME_SECONDS="${MIN_ACTIVE_RUNTIME_SECONDS:-300}"
 
 require_linear_api_key
 require_cmds jq gh
@@ -46,12 +47,13 @@ session_metadata_json() {
 should_reset_issue() {
   local workspace_dir="$1"
   local issue_key="$2"
-  local dirty_minutes token_total branch head develop_head
+  local dirty_minutes token_total branch head develop_head runtime_elapsed
 
   dirty_minutes=$(minutes_since_change "$workspace_dir")
   branch=$(git -C "$workspace_dir" branch --show-current 2>/dev/null || true)
   head=$(git -C "$workspace_dir" rev-parse HEAD 2>/dev/null || true)
   develop_head=$(git -C "$workspace_dir" rev-parse origin/develop 2>/dev/null || true)
+  runtime_elapsed="$(runtime_elapsed_seconds)"
 
   token_total=0
   if metadata=$(session_metadata_json "$issue_key" 2>/dev/null); then
@@ -63,7 +65,11 @@ should_reset_issue() {
     return 0
   fi
 
-  if (( dirty_minutes >= MAX_BRANCH_ONLY_STALL_MINUTES )) && [[ "$branch" =~ ^codex/${issue_key}- ]] && [[ -z "$(git -C "$workspace_dir" status --porcelain 2>/dev/null)" ]] && [[ "$head" == "$develop_head" ]] && ! has_open_pr_for_branch "$branch"; then
+  if (( runtime_elapsed > 0 )) && (( runtime_elapsed < MIN_ACTIVE_RUNTIME_SECONDS )); then
+    return 1
+  fi
+
+  if (( dirty_minutes >= MAX_BRANCH_ONLY_STALL_MINUTES )) && issue_branch_matches "$branch" "$issue_key" && [[ -z "$(git -C "$workspace_dir" status --porcelain 2>/dev/null)" ]] && [[ "$head" == "$develop_head" ]] && ! has_open_pr_for_branch "$branch"; then
     stale_dir="${workspace_dir}.stale.$(date +%s)"
     mv "$workspace_dir" "$stale_dir"
     echo "branch-only stall recovered via $(basename "$stale_dir")"
@@ -75,12 +81,12 @@ should_reset_issue() {
     return 0
   fi
 
-  if (( dirty_minutes >= MAX_UNTRACKED_MINUTES )) && [[ "$branch" =~ ^codex/${issue_key}- ]] && [[ -n "$(git -C "$workspace_dir" status --porcelain 2>/dev/null)" ]] && ! git -C "$workspace_dir" diff --quiet -- apps/ios/DayFlow.xcodeproj 2>/dev/null; then
+  if (( dirty_minutes >= MAX_UNTRACKED_MINUTES )) && issue_branch_matches "$branch" "$issue_key" && [[ -n "$(git -C "$workspace_dir" status --porcelain 2>/dev/null)" ]] && ! git -C "$workspace_dir" diff --quiet -- apps/ios/DayFlow.xcodeproj 2>/dev/null; then
     echo "workspace stalled with generated file churn"
     return 0
   fi
 
-  if (( dirty_minutes >= MAX_UNTRACKED_MINUTES )) && [[ "$branch" =~ ^codex/${issue_key}- ]] && [[ -n "$(git -C "$workspace_dir" status --porcelain 2>/dev/null)" ]] && ! has_open_pr_for_branch "$branch"; then
+  if (( dirty_minutes >= MAX_UNTRACKED_MINUTES )) && issue_branch_matches "$branch" "$issue_key" && [[ -n "$(git -C "$workspace_dir" status --porcelain 2>/dev/null)" ]] && ! has_open_pr_for_branch "$branch"; then
     echo "workspace stalled with uncommitted changes and no PR"
     return 0
   fi

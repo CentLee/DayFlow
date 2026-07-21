@@ -49,6 +49,10 @@ for workspace_dir in "$WORKSPACE_ROOT"/CEN-*; do
     continue
   fi
 
+  if issue_paused_locally "$issue_key"; then
+    continue
+  fi
+
   if ! workspace_is_owned "$workspace_dir" "$issue_key"; then
     continue
   fi

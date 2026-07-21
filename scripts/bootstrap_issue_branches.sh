@@ -48,7 +48,9 @@ for workspace_dir in "$WORKSPACE_ROOT"/CEN-*; do
   slug=$(slugify_title "$title")
   [[ -n "$slug" ]] || continue
 
-  target_branch="codex/${issue_key}-${slug}"
+  branch_key="$(branch_issue_slug "$issue_key")"
+  target_branch="feature/tasks-${branch_key}-${slug}"
   git -C "$workspace_dir" switch -c "$target_branch" >/dev/null 2>&1 || true
+  touch "$workspace_dir"
   echo "bootstrapped ${issue_key} branch ${target_branch}"
 done

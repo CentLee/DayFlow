@@ -2,7 +2,7 @@
 
 ## Summary
 
-DayFlow combines a shared calendar with a personal-first monthly budget board.
+DayFlow combines a personal calendar, invite-based shared calendars, and a personal-first monthly budget board.
 
 The budget experience is modeled directly after the provided Excel workbook:
 
@@ -38,27 +38,35 @@ These insights shape the MVP:
 
 ## Users
 
-- primary: you and a small number of invited collaborators
-- environment: local or self-hosted on a personal iMac server
+- primary: you and a small number of invited collaborators, starting with a two-person household use case
+- client platform: iOS only
+- environment: self-hosted on a personal iMac server with a custom domain
 
 ## Core Flows
 
 1. User signs in.
 2. App loads the user profile, calendars, and current month budget.
-3. User creates or edits personal events.
-4. User shares a calendar with another invited account.
-5. User edits monthly budget values in one screen and sees summary changes immediately.
+3. User lands on a personal calendar tab and a shared calendar tab.
+4. User creates or edits events in the personal calendar.
+5. User creates a shared calendar and sends an invite link by email or SMS.
+6. Invited user opens the link, signs in or registers, and joins the shared calendar.
+7. User moves or copies a personal event into a shared calendar when it should become visible to both people.
+8. User edits monthly budget values in one screen and sees summary changes immediately.
 
 ## MVP Features
 
 ### Calendar
 
-- personal calendar creation
-- calendar list
+- one default personal calendar per user
+- separate shared calendar list
+- personal and shared calendar tabs in the iOS app
 - month and week views
 - event CRUD
-- invite user to a specific calendar
-- member role: owner, editor, viewer
+- create a shared calendar
+- invite user to a specific shared calendar by email or SMS link
+- accept invite link into an existing or newly registered account
+- move or copy an event from personal calendar to shared calendar
+- simple member role model suitable for small household use
 
 ### Budget
 
@@ -138,10 +146,14 @@ These insights shape the MVP:
 - push notifications
 - web frontend
 - real-time collaborative editing
+- converting a personal calendar into a shared calendar
+- general-purpose multi-tenant team calendar administration
 
 ## Success Criteria
 
 - a user can manage a monthly budget without leaving the month board
 - fixed-cost toggles and amount edits update KPI totals correctly
-- invited users can access only shared calendars
+- every user always keeps a private personal calendar
+- invited users can access only the shared calendars they joined
+- a personal event can be intentionally copied or moved into a shared calendar
 - budget data remains private per user

@@ -120,7 +120,7 @@ Vertical slice exception:
 
 - Primary Agent owns the branch and completes the scoped work
 - Primary Agent remains responsible for the issue until it is merge-ready, including review-follow-up commits on the same branch
-- The first Git action in any workspace is creating or switching to `codex/<issue-id>-<short-slug>`
+- The first Git action in any workspace is creating or switching to `feature/tasks-<issue-number>-<short-slug>`
 - `main` is the release branch and `develop` is the integration branch
 - agent implementation never happens directly on `main` or `develop`
 - issue branches start from `develop`
@@ -161,7 +161,8 @@ DayFlow now enforces these automatic state transitions:
 
 The reconciliation source of truth is the issue branch name:
 
-- `codex/CEN-9-...` maps to `CEN-9`
+- `feature/tasks-9-...` maps to `CEN-9`
+- legacy `codex/9-...` or `codex/CEN-9-...` remains supported for older in-flight workspaces
 
 Automation scripts:
 
@@ -195,7 +196,8 @@ Additional guardrails:
 
 ## Branch and Workspace Naming
 
-- branch: `codex/<issue-id>-<short-slug>`
+- branch: `feature/tasks-<issue-number>-<short-slug>` preferred
+- legacy `codex/<issue-number>-<short-slug>` and `codex/<issue-id>-<short-slug>` remain supported for compatibility
 - workspace: `<workspace-root>/<issue-id>`
 
 ## Git Flow
@@ -204,7 +206,7 @@ DayFlow uses a three-level branch strategy:
 
 - `main`: release branch
 - `develop`: active integration branch
-- `codex/<issue-id>-<short-slug>`: isolated implementation branch for a single Linear issue
+- `feature/tasks-<issue-number>-<short-slug>`: isolated implementation branch for a single Linear issue
 
 Expected merge flow:
 
