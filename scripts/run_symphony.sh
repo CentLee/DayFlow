@@ -32,6 +32,32 @@ preflight_cleanup() {
   pkill -f "$ROOT_DIR/WORKFLOW.review.md" >/dev/null 2>&1 || true
 }
 
+terminate_process_tree() {
+  local pid="$1"
+  local child_pid
+
+  [[ -n "$pid" ]] || return 0
+  kill -0 "$pid" >/dev/null 2>&1 || return 0
+
+  while IFS= read -r child_pid; do
+    [[ -n "$child_pid" ]] || continue
+    terminate_process_tree "$child_pid"
+  done < <(pgrep -P "$pid" 2>/dev/null || true)
+
+  kill "$pid" >/dev/null 2>&1 || true
+  sleep 1
+  kill -0 "$pid" >/dev/null 2>&1 || return 0
+  kill -9 "$pid" >/dev/null 2>&1 || true
+}
+
+stop_implementation_runtime() {
+  if [[ -n "${IMPLEMENTATION_SYMPHONY_PID:-}" ]]; then
+    terminate_process_tree "$IMPLEMENTATION_SYMPHONY_PID"
+    IMPLEMENTATION_SYMPHONY_PID=""
+    export IMPLEMENTATION_SYMPHONY_PID
+  fi
+}
+
 acquire_lock() {
   local current_pid existing_pid
 
@@ -58,6 +84,49 @@ run_local_script() {
   bash "$script_path" "$@" || true
 }
 
+prelaunch_checks() {
+  local guard_output outcome_output
+
+  run_local_script "$ADMISSION_VALIDATOR_SCRIPT"
+  run_local_script "$OWNERSHIP_SCRIPT"
+  run_local_script "$SYNC_SCRIPT"
+  run_local_script "$REVIEW_FEEDBACK_SCRIPT"
+  run_local_script "$BRANCH_BOOTSTRAP_SCRIPT"
+  run_local_script "$PROOF_UPDATE_SCRIPT"
+
+  outcome_output="$(bash "$OUTCOME_VALIDATOR_SCRIPT" 2>/dev/null || true)"
+  if [[ -n "$outcome_output" ]]; then
+    printf '%s\n' "$outcome_output"
+    return 1
+  fi
+
+  guard_output="$(bash "$SESSION_GUARD_SCRIPT" 2>/dev/null || true)"
+  if [[ -n "$guard_output" ]]; then
+    printf '%s\n' "$guard_output"
+    return 1
+  fi
+
+  guard_output="$(bash "$EMPTY_SPIN_GUARD_SCRIPT" 2>/dev/null || true)"
+  if [[ -n "$guard_output" ]]; then
+    printf '%s\n' "$guard_output"
+    return 1
+  fi
+
+  guard_output="$(bash "$BRANCH_BOOTSTRAP_GUARD_SCRIPT" 2>/dev/null || true)"
+  if [[ -n "$guard_output" ]]; then
+    printf '%s\n' "$guard_output"
+    return 1
+  fi
+
+  guard_output="$(bash "$CODEX_RETRY_GUARD_SCRIPT" 2>/dev/null || true)"
+  if [[ -n "$guard_output" ]]; then
+    printf '%s\n' "$guard_output"
+    return 1
+  fi
+
+  return 0
+}
+
 sync_loop() {
   while true; do
     local guard_output outcome_output
@@ -71,41 +140,31 @@ sync_loop() {
     outcome_output="$(bash "$OUTCOME_VALIDATOR_SCRIPT" 2>/dev/null || true)"
     if [[ -n "$outcome_output" ]]; then
       printf '%s\n' "$outcome_output"
-      if [[ -n "${IMPLEMENTATION_SYMPHONY_PID:-}" ]]; then
-        kill "$IMPLEMENTATION_SYMPHONY_PID" >/dev/null 2>&1 || true
-      fi
+      stop_implementation_runtime
       break
     fi
     guard_output="$(bash "$SESSION_GUARD_SCRIPT" 2>/dev/null || true)"
     if [[ -n "$guard_output" ]]; then
       printf '%s\n' "$guard_output"
-      if [[ -n "${IMPLEMENTATION_SYMPHONY_PID:-}" ]]; then
-        kill "$IMPLEMENTATION_SYMPHONY_PID" >/dev/null 2>&1 || true
-      fi
+      stop_implementation_runtime
       break
     fi
     guard_output="$(bash "$EMPTY_SPIN_GUARD_SCRIPT" 2>/dev/null || true)"
     if [[ -n "$guard_output" ]]; then
       printf '%s\n' "$guard_output"
-      if [[ -n "${IMPLEMENTATION_SYMPHONY_PID:-}" ]]; then
-        kill "$IMPLEMENTATION_SYMPHONY_PID" >/dev/null 2>&1 || true
-      fi
+      stop_implementation_runtime
       break
     fi
     guard_output="$(bash "$BRANCH_BOOTSTRAP_GUARD_SCRIPT" 2>/dev/null || true)"
     if [[ -n "$guard_output" ]]; then
       printf '%s\n' "$guard_output"
-      if [[ -n "${IMPLEMENTATION_SYMPHONY_PID:-}" ]]; then
-        kill "$IMPLEMENTATION_SYMPHONY_PID" >/dev/null 2>&1 || true
-      fi
+      stop_implementation_runtime
       break
     fi
     guard_output="$(bash "$CODEX_RETRY_GUARD_SCRIPT" 2>/dev/null || true)"
     if [[ -n "$guard_output" ]]; then
       printf '%s\n' "$guard_output"
-      if [[ -n "${IMPLEMENTATION_SYMPHONY_PID:-}" ]]; then
-        kill "$IMPLEMENTATION_SYMPHONY_PID" >/dev/null 2>&1 || true
-      fi
+      stop_implementation_runtime
       break
     fi
     sleep "$SYNC_INTERVAL_SECONDS"
@@ -116,9 +175,7 @@ cleanup() {
   if [[ -n "${SYNC_LOOP_PID:-}" ]]; then
     kill "$SYNC_LOOP_PID" >/dev/null 2>&1 || true
   fi
-  if [[ -n "${IMPLEMENTATION_SYMPHONY_PID:-}" ]]; then
-    kill "$IMPLEMENTATION_SYMPHONY_PID" >/dev/null 2>&1 || true
-  fi
+  stop_implementation_runtime
   if [[ "$HARNESS_STOP_NOTIFIED" -eq 0 ]]; then
     HARNESS_STOP_NOTIFIED=1
     notify_harness_runtime "stopped" "run_symphony.sh exited or was interrupted."
@@ -133,15 +190,10 @@ preflight_cleanup
 cd "$SYMPHONY_DIR"
 notify_harness_runtime "started" "Workflow: WORKFLOW.md, sync interval: ${SYNC_INTERVAL_SECONDS}s"
 while true; do
-  run_local_script "$ADMISSION_VALIDATOR_SCRIPT"
-  run_local_script "$OWNERSHIP_SCRIPT"
-  run_local_script "$SYNC_SCRIPT"
-  run_local_script "$BRANCH_BOOTSTRAP_SCRIPT"
-  run_local_script "$OUTCOME_VALIDATOR_SCRIPT"
-  run_local_script "$SESSION_GUARD_SCRIPT"
-  run_local_script "$EMPTY_SPIN_GUARD_SCRIPT"
-  run_local_script "$BRANCH_BOOTSTRAP_GUARD_SCRIPT"
-  run_local_script "$CODEX_RETRY_GUARD_SCRIPT"
+  if ! prelaunch_checks; then
+    sleep 2
+    continue
+  fi
 
   sync_loop &
   SYNC_LOOP_PID=$!
@@ -157,16 +209,7 @@ while true; do
     SYNC_LOOP_PID=""
   fi
 
-  IMPLEMENTATION_SYMPHONY_PID=""
-  export IMPLEMENTATION_SYMPHONY_PID
-  run_local_script "$ADMISSION_VALIDATOR_SCRIPT"
-  run_local_script "$OWNERSHIP_SCRIPT"
-  run_local_script "$SYNC_SCRIPT"
-  run_local_script "$BRANCH_BOOTSTRAP_SCRIPT"
-  run_local_script "$OUTCOME_VALIDATOR_SCRIPT"
-  run_local_script "$SESSION_GUARD_SCRIPT"
-  run_local_script "$EMPTY_SPIN_GUARD_SCRIPT"
-  run_local_script "$BRANCH_BOOTSTRAP_GUARD_SCRIPT"
-  run_local_script "$CODEX_RETRY_GUARD_SCRIPT"
+  stop_implementation_runtime
+  prelaunch_checks >/dev/null || true
   sleep 2
 done

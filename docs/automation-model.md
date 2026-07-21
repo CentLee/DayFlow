@@ -193,6 +193,8 @@ Additional guardrails:
 - fresh workspaces are not treated as bootstrap stalls during the initial runtime warm-up window
 - branch-bootstrap stalls must remain clean and still match `origin/develop` before being recovered
 - requested-changes handling should rely on structured GitHub review state rather than comment text heuristics
+- a locally paused issue must be moved out of the runnable `Todo` queue state before the next dispatch cycle
+- when a guard pauses or blocks an active issue, the harness must stop the active Symphony/Codex process tree instead of waiting for the run to end on its own
 
 ## Branch and Workspace Naming
 
