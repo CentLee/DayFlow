@@ -22,6 +22,12 @@ DAYFLOW_AUTO_MIGRATE=true
 DAYFLOW_MIGRATIONS_DIR=./migrations
 ```
 
+PostgreSQL runtime seed policy:
+
+- default: `DAYFLOW_SEED_MODE=none`
+- explicit demo/test seed only: `DAYFLOW_SEED_MODE=demo` or `DAYFLOW_SEED_MODE=test`
+- do not rely on `DAYFLOW_AUTO_MIGRATE` to imply seed execution
+
 ## System Test
 
 From the repo root:

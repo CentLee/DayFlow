@@ -18,13 +18,19 @@ import (
 )
 
 const (
-	StoreModeMemory = "memory"
-	StoreModeHybrid = "hybrid"
+	StoreModeMemory   = "memory"
+	StoreModeHybrid   = "hybrid"
+	StoreModePostgres = "postgres"
+
+	SeedModeNone = "none"
+	SeedModeDemo = "demo"
+	SeedModeTest = "test"
 )
 
 type Config struct {
 	Addr          string
 	StoreMode     string
+	SeedMode      string
 	DatabaseURL   string
 	AutoMigrate   bool
 	MigrationsDir string
@@ -34,6 +40,7 @@ func ConfigFromEnv() Config {
 	return Config{
 		Addr:          envOrDefault("DAYFLOW_ADDR", ":8080"),
 		StoreMode:     strings.ToLower(envOrDefault("DAYFLOW_STORE_MODE", StoreModeMemory)),
+		SeedMode:      strings.ToLower(envOrDefault("DAYFLOW_SEED_MODE", SeedModeNone)),
 		DatabaseURL:   os.Getenv("DAYFLOW_DATABASE_URL"),
 		AutoMigrate:   envOrDefault("DAYFLOW_AUTO_MIGRATE", "false") == "true",
 		MigrationsDir: envOrDefault("DAYFLOW_MIGRATIONS_DIR", "./migrations"),
@@ -81,7 +88,7 @@ func newRepository(cfg Config) (store.Repository, func() error, error) {
 	if mode == StoreModeMemory {
 		return memory, nil, nil
 	}
-	if mode != StoreModeHybrid {
+	if mode != StoreModeHybrid && mode != StoreModePostgres {
 		return nil, nil, fmt.Errorf("unsupported DAYFLOW_STORE_MODE %q", cfg.StoreMode)
 	}
 	if cfg.DatabaseURL == "" {
@@ -105,13 +112,28 @@ func newRepository(cfg Config) (store.Repository, func() error, error) {
 		}
 	}
 
-	hybrid := store.NewHybridStore(memory, store.NewPostgresBudgetStore(db))
-	if err := hybrid.EnsureBudgetUsers(ctx); err != nil {
-		_ = db.Close()
-		return nil, nil, fmt.Errorf("seed hybrid budget users: %w", err)
+	if mode == StoreModeHybrid {
+		hybrid := store.NewHybridStore(memory, store.NewPostgresBudgetStore(db))
+		if err := hybrid.EnsureBudgetUsers(ctx); err != nil {
+			_ = db.Close()
+			return nil, nil, fmt.Errorf("seed hybrid budget users: %w", err)
+		}
+		return hybrid, db.Close, nil
 	}
 
-	return hybrid, db.Close, nil
+	postgresStore := store.NewPostgresStore(db)
+	switch cfg.SeedMode {
+	case "", SeedModeNone:
+	case SeedModeDemo, SeedModeTest:
+		if err := postgresStore.EnsureDemoSeed(ctx); err != nil {
+			_ = db.Close()
+			return nil, nil, fmt.Errorf("seed postgres runtime: %w", err)
+		}
+	default:
+		_ = db.Close()
+		return nil, nil, fmt.Errorf("unsupported DAYFLOW_SEED_MODE %q", cfg.SeedMode)
+	}
+	return postgresStore, db.Close, nil
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB, dir string) error {

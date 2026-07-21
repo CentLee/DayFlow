@@ -1,7 +1,6 @@
 services:
   postgres:
     image: postgres:16
-    container_name: dayflow-system-postgres
     environment:
       POSTGRES_DB: dayflow_test
       POSTGRES_USER: dayflow
@@ -18,13 +17,13 @@ services:
     build:
       context: ../../services/api
       dockerfile: Dockerfile
-    container_name: dayflow-system-api
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       DAYFLOW_ADDR: ":8080"
-      DAYFLOW_STORE_MODE: "hybrid"
+      DAYFLOW_STORE_MODE: "postgres"
+      DAYFLOW_SEED_MODE: "test"
       DAYFLOW_DATABASE_URL: "postgres://dayflow:dayflow@postgres:5432/dayflow_test?sslmode=disable"
       DAYFLOW_AUTO_MIGRATE: "true"
       DAYFLOW_MIGRATIONS_DIR: "/app/migrations"
