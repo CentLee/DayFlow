@@ -1,0 +1,28 @@
+name: Harness CI
+
+on:
+  push:
+    paths:
+      - "scripts/**"
+      - ".github/workflows/harness-ci.yml"
+  pull_request:
+    paths:
+      - "scripts/**"
+      - ".github/workflows/harness-ci.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate harness bash syntax
+        run: |
+          bash -n \
+            scripts/lib/dayflow_harness.sh \
+            scripts/lib/dayflow_notifications.sh \
+            scripts/sync_linear_pr_states.sh \
+            scripts/reconcile_review_feedback.sh \
+            scripts/collect_pr_proof.sh \
+            scripts/update_pr_proof.sh \
+            scripts/notify_merge_ready_prs.sh \
+            scripts/run_symphony.sh
