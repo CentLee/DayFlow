@@ -74,6 +74,7 @@ Environment modes:
 
 - default local mode: in-memory store
 - system-test mode: set `DAYFLOW_STORE_MODE=hybrid` and `DAYFLOW_DATABASE_URL=...` to keep auth/calendar in memory while exercising budget storage against PostgreSQL
+- PostgreSQL runtime defaults to `DAYFLOW_SEED_MODE=none`; test/demo seed data is loaded only when explicitly requested
 
 ### 2a. Run API System Tests
 

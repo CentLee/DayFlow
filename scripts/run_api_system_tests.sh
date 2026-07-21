@@ -7,10 +7,12 @@ GO_BIN="${GO_BIN:-go}"
 DOCKER_BIN="${DOCKER_BIN:-docker}"
 BASE_URL="${DAYFLOW_SYSTEM_BASE_URL:-http://127.0.0.1:18080}"
 KEEP_STACK="${KEEP_SYSTEM_TEST_STACK:-0}"
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-dayflow-system-$$}"
 
 if [[ "${DOCKER_BIN}" == */* ]]; then
   export PATH="$(dirname "${DOCKER_BIN}"):${PATH}"
 fi
+export COMPOSE_PROJECT_NAME
 
 cleanup() {
   if [[ "${KEEP_STACK}" == "1" ]]; then
