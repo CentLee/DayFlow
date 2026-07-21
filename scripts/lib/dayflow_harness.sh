@@ -236,3 +236,10 @@ issue_paused_locally() {
   [[ -f "$DAYFLOW_PAUSED_ISSUES_FILE" ]] || return 1
   jq -e --arg issue_key "$issue_key" 'has($issue_key)' "$DAYFLOW_PAUSED_ISSUES_FILE" >/dev/null 2>&1
 }
+
+paused_issue_reason() {
+  local issue_key="$1"
+
+  [[ -f "$DAYFLOW_PAUSED_ISSUES_FILE" ]] || return 1
+  jq -r --arg issue_key "$issue_key" '.[$issue_key].reason // ""' "$DAYFLOW_PAUSED_ISSUES_FILE"
+}
