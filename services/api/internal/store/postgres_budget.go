@@ -26,6 +26,26 @@ func NewPostgresBudgetStore(db *sql.DB) *PostgresBudgetStore {
 	}
 }
 
+func (s *PostgresBudgetStore) EnsureUser(ctx context.Context, user domain.User) error {
+	if user.ID == "" || user.Email == "" || user.DisplayName == "" {
+		return fmt.Errorf("budget user seed requires id, email, and display_name: %w", ErrInvalidInput)
+	}
+
+	const query = `
+INSERT INTO users (id, email, display_name, password_hash, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $5)
+ON CONFLICT (id) DO UPDATE
+SET email = EXCLUDED.email,
+    display_name = EXCLUDED.display_name,
+    updated_at = EXCLUDED.updated_at`
+
+	now := s.now()
+	if _, err := s.db.ExecContext(ctx, query, user.ID, user.Email, user.DisplayName, "hybrid-runtime-only", now); err != nil {
+		return fmt.Errorf("seed budget user: %w", err)
+	}
+	return nil
+}
+
 func (s *PostgresBudgetStore) LoadBudgetTemplates(ctx context.Context, ownerUserID string) (domain.BudgetTemplates, error) {
 	templates, err := s.loadBudgetTemplates(ctx, ownerUserID)
 	if err != nil {

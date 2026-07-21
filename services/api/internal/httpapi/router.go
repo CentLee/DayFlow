@@ -14,10 +14,10 @@ import (
 )
 
 type Router struct {
-	store *store.MemoryStore
+	store store.Repository
 }
 
-func NewRouter(store *store.MemoryStore) http.Handler {
+func NewRouter(store store.Repository) http.Handler {
 	r := &Router{store: store}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", r.handleHealth)
@@ -26,6 +26,7 @@ func NewRouter(store *store.MemoryStore) http.Handler {
 	mux.HandleFunc("/v1/me", r.handleMe)
 	mux.HandleFunc("/v1/calendars", r.handleCalendars)
 	mux.HandleFunc("/v1/calendars/", r.handleCalendarSubroutes)
+	mux.HandleFunc("/v1/invites/", r.handleInvites)
 	mux.HandleFunc("/v1/events/", r.handleEvents)
 	mux.HandleFunc("/v1/budget/templates", r.handleBudgetTemplates)
 	mux.HandleFunc("/v1/budget/months/", r.handleBudgetMonth)
@@ -140,7 +141,7 @@ func (r *Router) handleCalendars(w http.ResponseWriter, req *http.Request) {
 			writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{"calendar": calendar})
+		writeJSON(w, http.StatusCreated, calendar)
 	default:
 		writeMethodNotAllowed(w)
 	}
@@ -218,10 +219,78 @@ func (r *Router) handleCalendarSubroutes(w http.ResponseWriter, req *http.Reques
 		}
 	}
 	if len(parts) == 2 && parts[1] == "invites" && req.Method == http.MethodPost {
-		writeJSON(w, http.StatusCreated, map[string]string{"status": "not_implemented"})
+		var payload struct {
+			Email           string `json:"email"`
+			DeliveryChannel string `json:"delivery_channel"`
+			Role            string `json:"role"`
+		}
+		if err := decodeJSON(req, &payload); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		invite, err := r.store.CreateInvite(userID, parts[0], store.InviteInput{
+			Email:           payload.Email,
+			DeliveryChannel: payload.DeliveryChannel,
+			Role:            payload.Role,
+		})
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, invite)
 		return
 	}
 	http.NotFound(w, req)
+}
+
+func (r *Router) handleInvites(w http.ResponseWriter, req *http.Request) {
+	path := strings.TrimPrefix(req.URL.Path, "/v1/invites/")
+	parts := strings.Split(path, "/")
+
+	if len(parts) == 1 && parts[0] != "" {
+		if req.Method != http.MethodGet {
+			writeMethodNotAllowed(w)
+			return
+		}
+		invite, err := r.store.PreviewInvite(parts[0])
+		if err != nil {
+			switch {
+			case errors.Is(err, store.ErrInvalidInvite):
+				writeJSON(w, http.StatusForbidden, errorPayload("invalid_invite", err.Error()))
+			default:
+				writeStoreError(w, err)
+			}
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"invite": invite})
+		return
+	}
+
+	if len(parts) != 2 || parts[0] == "" || parts[1] != "accept" {
+		http.NotFound(w, req)
+		return
+	}
+	if req.Method != http.MethodPost {
+		writeMethodNotAllowed(w)
+		return
+	}
+
+	userID, ok := r.currentUserID(w, req)
+	if !ok {
+		return
+	}
+
+	calendar, err := r.store.AcceptInviteCalendar(userID, parts[0])
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrInvalidInvite), errors.Is(err, store.ErrInviteEmailMismatch):
+			writeJSON(w, http.StatusForbidden, errorPayload("invalid_invite", err.Error()))
+		default:
+			writeStoreError(w, err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"calendar": calendar})
 }
 
 func (r *Router) handleEvents(w http.ResponseWriter, req *http.Request) {

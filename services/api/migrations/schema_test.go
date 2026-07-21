@@ -99,6 +99,20 @@ func TestBudgetStorageSchemaAddsReminderTimestampsAndIndexes(t *testing.T) {
 	)
 }
 
+func TestCalendarRuntimeColumnsSchemaAddsKindAndDeliveryChannel(t *testing.T) {
+	contents := mustReadMigration(t, "0005_calendar_runtime_columns.sql")
+	requireContainsAll(t, contents,
+		"ALTER TABLE calendars",
+		"ADD COLUMN kind TEXT NOT NULL DEFAULT 'shared';",
+		"ADD CONSTRAINT calendars_kind_check",
+		"CHECK (kind IN ('personal', 'shared'));",
+		"ALTER TABLE calendar_invites",
+		"ADD COLUMN delivery_channel TEXT NOT NULL DEFAULT 'email';",
+		"ADD CONSTRAINT calendar_invites_delivery_channel_check",
+		"CHECK (delivery_channel IN ('email', 'sms'));",
+	)
+}
+
 func mustReadMigration(t *testing.T, name string) string {
 	t.Helper()
 	contents, err := os.ReadFile(name)

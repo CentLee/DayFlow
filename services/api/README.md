@@ -8,10 +8,41 @@ Go API for DayFlow.
 go run ./cmd/dayflow-api
 ```
 
+## Modes
+
+- default: in-memory runtime for fast local iteration
+- hybrid: memory auth/calendar/event flows plus PostgreSQL-backed budget routes
+
+Hybrid mode environment:
+
+```bash
+DAYFLOW_STORE_MODE=hybrid
+DAYFLOW_DATABASE_URL=postgres://dayflow:dayflow@127.0.0.1:5432/dayflow?sslmode=disable
+DAYFLOW_AUTO_MIGRATE=true
+DAYFLOW_MIGRATIONS_DIR=./migrations
+```
+
+PostgreSQL runtime seed policy:
+
+- default: `DAYFLOW_SEED_MODE=none`
+- explicit demo/test seed only: `DAYFLOW_SEED_MODE=demo` or `DAYFLOW_SEED_MODE=test`
+- do not rely on `DAYFLOW_AUTO_MIGRATE` to imply seed execution
+
+## System Test
+
+From the repo root:
+
+```bash
+scripts/run_api_system_tests.sh
+```
+
+That script starts the API and PostgreSQL through `infra/docker/docker-compose.system.yml` and then runs black-box API tests against the running service.
+
 ## Current Shape
 
 - standard library HTTP server
-- stateful in-memory repository for local CRUD and permission checks
+- stateful in-memory repository for auth, calendar, event, and invite permission checks
+- optional hybrid runtime for PostgreSQL-backed budget storage
 - PostgreSQL migrations staged under `migrations/`
 - health, auth, calendar, event, and budget routes available for MVP foundation
 

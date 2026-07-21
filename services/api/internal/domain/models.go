@@ -8,17 +8,35 @@ type User struct {
 
 type Me struct {
 	User                  User       `json:"user"`
-	OwnedCalendars        []Calendar `json:"owned_calendars"`
+	PersonalCalendar      Calendar   `json:"personal_calendar"`
 	SharedCalendars       []Calendar `json:"shared_calendars"`
 	CurrentBudgetMonthKey string     `json:"current_budget_month_key"`
 }
 
 type Calendar struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Color     string `json:"color"`
-	Role      string `json:"role,omitempty"`
-	UpdatedAt string `json:"updated_at"`
+	ID             string `json:"id"`
+	Kind           string `json:"kind"`
+	Name           string `json:"name"`
+	Color          string `json:"color"`
+	MembershipRole string `json:"membership_role,omitempty"`
+	UpdatedAt      string `json:"updated_at"`
+}
+
+type CalendarInvite struct {
+	ID                   string `json:"id"`
+	CalendarID           string `json:"calendar_id"`
+	CalendarName         string `json:"calendar_name,omitempty"`
+	Email                string `json:"email"`
+	DeliveryChannel      string `json:"delivery_channel,omitempty"`
+	Role                 string `json:"role"`
+	InviteCode           string `json:"invite_code"`
+	InviteURL            string `json:"invite_url,omitempty"`
+	InvitedByUserID      string `json:"invited_by_user_id,omitempty"`
+	InvitedByDisplayName string `json:"invited_by_display_name,omitempty"`
+	AcceptedByUserID     string `json:"accepted_by_user_id,omitempty"`
+	AcceptedAt           string `json:"accepted_at,omitempty"`
+	ExpiresAt            string `json:"expires_at,omitempty"`
+	UpdatedAt            string `json:"updated_at"`
 }
 
 type Event struct {
