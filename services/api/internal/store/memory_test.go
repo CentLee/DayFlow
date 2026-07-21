@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/kakao-ent/dayflow/services/api/internal/domain"
 )
 
 func TestMemoryStoreCalendarPermissions(t *testing.T) {
@@ -32,6 +34,9 @@ func TestMemoryStoreCalendarPermissions(t *testing.T) {
 	}
 	if _, err := repo.UpdateCalendar("usr_001", created.ID, CalendarPatch{Name: stringPtr("Gone")}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected not found after delete, got %v", err)
+	}
+	if err := repo.DeleteCalendar("usr_001", "cal_001"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected personal calendar delete to be rejected, got %v", err)
 	}
 }
 
@@ -193,6 +198,31 @@ func TestMemoryStoreInviteCreationRejectsPersonalCalendar(t *testing.T) {
 		Role:            RoleViewer,
 	}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected personal calendar invite to be rejected, got %v", err)
+	}
+}
+
+func TestMemoryStoreInvitePreviewAndAcceptRejectNonSharedTargets(t *testing.T) {
+	repo := NewMemoryStore()
+	now := time.Now().UTC().Format(time.RFC3339)
+	repo.invites["invite_personal"] = invite{
+		Invite: domain.CalendarInvite{
+			ID:              "cinv_bad",
+			CalendarID:      "cal_001",
+			CalendarName:    "Personal",
+			Email:           "outside@dayflow.local",
+			DeliveryChannel: "sms",
+			Role:            RoleViewer,
+			InviteCode:      "invite_personal",
+			InviteURL:       "https://dayflow.local/invites/invite_personal",
+			UpdatedAt:       now,
+		},
+	}
+
+	if _, err := repo.PreviewInvite("invite_personal"); !errors.Is(err, ErrInvalidInvite) {
+		t.Fatalf("expected personal-calendar invite preview to be invalid, got %v", err)
+	}
+	if _, err := repo.AcceptInvite("usr_004", "invite_personal"); !errors.Is(err, ErrInvalidInvite) {
+		t.Fatalf("expected personal-calendar invite accept to be invalid, got %v", err)
 	}
 }
 

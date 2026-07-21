@@ -423,9 +423,9 @@ func (s *MemoryStore) PreviewInvite(inviteCode string) (domain.CalendarInvite, e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	inviteRecord, ok := s.invites[inviteCode]
-	if !ok {
-		return domain.CalendarInvite{}, ErrInvalidInvite
+	inviteRecord, _, err := s.sharedCalendarInviteLocked(inviteCode)
+	if err != nil {
+		return domain.CalendarInvite{}, err
 	}
 	return inviteRecord.Invite, nil
 }
@@ -525,12 +525,15 @@ func (s *MemoryStore) DeleteCalendar(userID, calendarID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, role, err := s.calendarForMutationLocked(userID, calendarID)
+	record, role, err := s.calendarForMutationLocked(userID, calendarID)
 	if err != nil {
 		return err
 	}
 	if role != RoleOwner {
 		return ErrForbidden
+	}
+	if record.Calendar.Kind == CalendarKindPersonal {
+		return fmt.Errorf("personal calendars cannot be deleted: %w", ErrInvalidInput)
 	}
 
 	delete(s.calendars, calendarID)
@@ -871,9 +874,9 @@ func (s *MemoryStore) meForUserIDLocked(userID string) (domain.Me, bool) {
 }
 
 func (s *MemoryStore) acceptInviteLocked(userID, email, inviteCode string) (domain.CalendarInvite, error) {
-	inviteRecord, ok := s.invites[inviteCode]
-	if !ok {
-		return domain.CalendarInvite{}, ErrInvalidInvite
+	inviteRecord, _, err := s.sharedCalendarInviteLocked(inviteCode)
+	if err != nil {
+		return domain.CalendarInvite{}, err
 	}
 	if normalizeEmail(inviteRecord.Invite.Email) != normalizeEmail(email) {
 		return domain.CalendarInvite{}, ErrInviteEmailMismatch
@@ -883,9 +886,6 @@ func (s *MemoryStore) acceptInviteLocked(userID, email, inviteCode string) (doma
 			return domain.CalendarInvite{}, ErrInvalidInvite
 		}
 		return inviteRecord.Invite, nil
-	}
-	if _, ok := s.calendars[inviteRecord.Invite.CalendarID]; !ok {
-		return domain.CalendarInvite{}, ErrNotFound
 	}
 	role := inviteRecord.Invite.Role
 	if role == "" {
@@ -905,6 +905,20 @@ func (s *MemoryStore) acceptInviteLocked(userID, email, inviteCode string) (doma
 	inviteRecord.Invite.UpdatedAt = now
 	s.invites[inviteCode] = inviteRecord
 	return inviteRecord.Invite, nil
+}
+
+func (s *MemoryStore) sharedCalendarInviteLocked(inviteCode string) (invite, calendarRecord, error) {
+	inviteRecord, ok := s.invites[inviteCode]
+	if !ok {
+		return invite{}, calendarRecord{}, ErrInvalidInvite
+	}
+	record, ok := s.calendars[inviteRecord.Invite.CalendarID]
+	if !ok || record.Calendar.Kind != CalendarKindShared {
+		return invite{}, calendarRecord{}, ErrInvalidInvite
+	}
+	inviteRecord.Invite.CalendarName = record.Calendar.Name
+	s.invites[inviteCode] = inviteRecord
+	return inviteRecord, record, nil
 }
 
 func (s *MemoryStore) userByIDLocked(userID string) (storedUser, bool) {
