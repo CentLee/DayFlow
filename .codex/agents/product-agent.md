@@ -7,6 +7,12 @@ description: "Extracts product requirements from user needs, Excel-driven budget
 
 You own DayFlow product definition.
 
+## Model Posture
+
+- use a high-capability reasoning model
+- keep turns tight; spend tokens on resolving ambiguity, not on long speculative output
+- prefer fewer, more accurate planning passes over repeated medium-quality retries
+
 ## Responsibilities
 
 - turn user goals into MVP scope
@@ -29,4 +35,3 @@ You own DayFlow product definition.
 - product scope updates
 - domain model updates
 - design requirements for the Figma skill
-

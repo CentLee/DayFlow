@@ -1,76 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="/Users/kakao_ent/Documents/DayFlow"
-WORKSPACE_ROOT="$ROOT_DIR/.symphony/workspaces"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/dayflow_harness.sh"
+
 MAX_SESSION_MINUTES="${MAX_SESSION_MINUTES:-15}"
 MAX_UNTRACKED_MINUTES="${MAX_UNTRACKED_MINUTES:-8}"
 MAX_BRANCH_ONLY_STALL_MINUTES="${MAX_BRANCH_ONLY_STALL_MINUTES:-3}"
 MAX_TOKEN_TOTAL="${MAX_TOKEN_TOTAL:-120000}"
-if [[ -z "${LINEAR_API_KEY:-}" ]]; then
-  echo "LINEAR_API_KEY is required" >&2
-  exit 1
-fi
 
-if ! command -v jq >/dev/null 2>&1; then
-  echo "jq is required" >&2
-  exit 1
-fi
-
-linear_query() {
-  local query="$1"
-  curl -s https://api.linear.app/graphql \
-    -H "Content-Type: application/json" \
-    -H "Authorization: ${LINEAR_API_KEY}" \
-    --data "$(jq -n --arg query "$query" '{query: $query}')"
-}
-
-linear_mutation() {
-  local issue_id="$1"
-  local state_id="$2"
-  local query
-
-  query=$(cat <<EOF
-mutation {
-  issueUpdate(id: "${issue_id}", input: {stateId: "${state_id}"}) {
-    success
-  }
-}
-EOF
-)
-
-  linear_query "$query" >/dev/null
-}
+require_linear_api_key
+require_cmds jq gh
 
 issue_table_json=$(
-  linear_query "query { project(id: \"fdeb5f63-05f2-4ab2-bb9d-a12dc0084b9f\") { issues(first: 100) { nodes { id identifier state { name } } } } }" |
-    jq -c '.data.project.issues.nodes'
+  project_issues_json
 )
 
 find_issue_id() {
   local identifier="$1"
-  jq -r --arg identifier "$identifier" '.[] | select(.identifier == $identifier) | .id' <<<"$issue_table_json"
+  find_issue_field "$issue_table_json" "$identifier" '.id'
 }
 
 find_issue_state_name() {
   local identifier="$1"
-  jq -r --arg identifier "$identifier" '.[] | select(.identifier == $identifier) | .state.name' <<<"$issue_table_json"
-}
-
-has_open_pr() {
-  local branch="$1"
-  GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" \
-    gh pr list --state open --limit 100 --json headRefName |
-    jq -e --arg branch "$branch" '.[] | select(.headRefName == $branch)' >/dev/null
-}
-
-minutes_since_change() {
-  local path="$1"
-  local now modified
-
-  now=$(date +%s)
-  modified=$(stat -f %m "$path" 2>/dev/null || echo "$now")
-  echo $(((now - modified) / 60))
+  find_issue_field "$issue_table_json" "$identifier" '.state.name'
 }
 
 session_metadata_json() {
@@ -111,7 +63,7 @@ should_reset_issue() {
     return 0
   fi
 
-  if (( dirty_minutes >= MAX_BRANCH_ONLY_STALL_MINUTES )) && [[ "$branch" =~ ^codex/${issue_key}- ]] && [[ -z "$(git -C "$workspace_dir" status --porcelain 2>/dev/null)" ]] && [[ "$head" == "$develop_head" ]] && ! has_open_pr "$branch"; then
+  if (( dirty_minutes >= MAX_BRANCH_ONLY_STALL_MINUTES )) && [[ "$branch" =~ ^codex/${issue_key}- ]] && [[ -z "$(git -C "$workspace_dir" status --porcelain 2>/dev/null)" ]] && [[ "$head" == "$develop_head" ]] && ! has_open_pr_for_branch "$branch"; then
     stale_dir="${workspace_dir}.stale.$(date +%s)"
     mv "$workspace_dir" "$stale_dir"
     echo "branch-only stall recovered via $(basename "$stale_dir")"
@@ -128,7 +80,7 @@ should_reset_issue() {
     return 0
   fi
 
-  if (( dirty_minutes >= MAX_UNTRACKED_MINUTES )) && [[ "$branch" =~ ^codex/${issue_key}- ]] && [[ -n "$(git -C "$workspace_dir" status --porcelain 2>/dev/null)" ]] && ! has_open_pr "$branch"; then
+  if (( dirty_minutes >= MAX_UNTRACKED_MINUTES )) && [[ "$branch" =~ ^codex/${issue_key}- ]] && [[ -n "$(git -C "$workspace_dir" status --porcelain 2>/dev/null)" ]] && ! has_open_pr_for_branch "$branch"; then
     echo "workspace stalled with uncommitted changes and no PR"
     return 0
   fi

@@ -2,8 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="/Users/kakao_ent/Documents/DayFlow"
+source "$ROOT_DIR/scripts/lib/dayflow_notifications.sh"
+
 SYMPHONY_DIR="$ROOT_DIR/vendor/symphony/elixir"
 IMPLEMENTATION_WORKFLOW_FILE="$ROOT_DIR/WORKFLOW.md"
+ADMISSION_VALIDATOR_SCRIPT="$ROOT_DIR/scripts/validate_issue_admission.sh"
 SYNC_SCRIPT="$ROOT_DIR/scripts/sync_linear_pr_states.sh"
 OWNERSHIP_SCRIPT="$ROOT_DIR/scripts/reconcile_issue_ownership.sh"
 REVIEW_FEEDBACK_SCRIPT="$ROOT_DIR/scripts/reconcile_review_feedback.sh"
@@ -14,6 +17,7 @@ OUTCOME_VALIDATOR_SCRIPT="$ROOT_DIR/scripts/validate_issue_outcomes.sh"
 EMPTY_SPIN_GUARD_SCRIPT="$ROOT_DIR/scripts/guard_empty_workspace_spins.sh"
 BRANCH_BOOTSTRAP_GUARD_SCRIPT="$ROOT_DIR/scripts/guard_branch_bootstrap_stalls.sh"
 SYNC_INTERVAL_SECONDS="${SYNC_INTERVAL_SECONDS:-20}"
+HARNESS_STOP_NOTIFIED=0
 
 if [[ -z "${LINEAR_API_KEY:-}" ]]; then
   echo "LINEAR_API_KEY is required" >&2
@@ -30,6 +34,7 @@ sync_loop() {
   while true; do
     local guard_output outcome_output
 
+    "$ADMISSION_VALIDATOR_SCRIPT" || true
     "$OWNERSHIP_SCRIPT" || true
     "$SYNC_SCRIPT" || true
     "$REVIEW_FEEDBACK_SCRIPT" || true
@@ -78,13 +83,19 @@ cleanup() {
   if [[ -n "${IMPLEMENTATION_SYMPHONY_PID:-}" ]]; then
     kill "$IMPLEMENTATION_SYMPHONY_PID" >/dev/null 2>&1 || true
   fi
+  if [[ "$HARNESS_STOP_NOTIFIED" -eq 0 ]]; then
+    notify_harness_runtime "stopped" "run_symphony.sh exited or was interrupted."
+    HARNESS_STOP_NOTIFIED=1
+  fi
 }
 
 trap cleanup EXIT INT TERM
 
 preflight_cleanup
 cd "$SYMPHONY_DIR"
+notify_harness_runtime "started" "Workflow: WORKFLOW.md, sync interval: ${SYNC_INTERVAL_SECONDS}s"
 while true; do
+  "$ADMISSION_VALIDATOR_SCRIPT" || true
   "$OWNERSHIP_SCRIPT" || true
   "$SYNC_SCRIPT" || true
   "$BRANCH_BOOTSTRAP_SCRIPT" || true
@@ -109,6 +120,7 @@ while true; do
 
   IMPLEMENTATION_SYMPHONY_PID=""
   export IMPLEMENTATION_SYMPHONY_PID
+  "$ADMISSION_VALIDATOR_SCRIPT" || true
   "$OWNERSHIP_SCRIPT" || true
   "$SYNC_SCRIPT" || true
   "$BRANCH_BOOTSTRAP_SCRIPT" || true

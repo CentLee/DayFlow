@@ -14,6 +14,8 @@ This repository uses a minimal local Symphony workflow modeled after the officia
 
 - `WORKFLOW.md`
 - `docs/automation-model.md`
+- `docs/harness-engineering.md`
+- `docs/git-tracking-policy.md`
 - `docs/github-local-auth.md`
 - `docs/iteration-queue.md`
 - `docs/review-checklist.md`
@@ -34,6 +36,7 @@ This repository uses a minimal local Symphony workflow modeled after the officia
 7. Symphony runs `codex app-server` in that workspace.
 8. The assigned primary agent keeps ownership through review follow-up until the PR is merge-ready.
 9. Results are returned through branch, PR, CI status, and proof-of-work summary.
+10. Use `scripts/audit_harness_drift.sh` during maintenance to check doc/workflow/script alignment.
 
 ## Token Budget Defaults
 
@@ -49,17 +52,21 @@ These values are based on the official Symphony configuration surface in the REA
 
 ## DayFlow State Machine
 
-Current Linear workspace does not have a dedicated `Ready` state yet, so DayFlow currently uses:
+Current DayFlow workflow still uses `Todo` as the runnable queue state, with admission checks in the wrapper to keep malformed issues from being retried indefinitely.
+If a `Blocked` state exists in Linear, the admission validator may move incomplete issues there.
+
+Current state usage:
 
 - `Todo`: auto-runnable queue state
 - `In Progress`: actively executing
 - `In Review`: PR open and under review
+- `Blocked`: optional manual intervention state for malformed or externally blocked work
 - `Done`: merged and complete
 - `Canceled` and `Duplicate`: terminal
 
 Planned future refinement:
 
-- add `Ready` and `Blocked` when the workflow is mature enough to separate queued work from draft work
+- add `Ready` later if the workflow needs a separate admission-passed queue state
 
 ## Required Issue Metadata
 
@@ -115,6 +122,8 @@ Automatic reconciliation rules:
 - draft PR keeps the issue in `In Progress`
 - ready-for-review PR moves the issue to `In Review`
 - fresh review findings return the PR to draft and the issue to `Todo`
+- stale in-progress work with no diff returns to `Todo`
+- stale in-progress work with commits but no PR stays owned for manual follow-up instead of being silently retried
 - merged PR moves the issue to `Done`
 - review follow-up returns to the same issue owner instead of a separate review lane
 

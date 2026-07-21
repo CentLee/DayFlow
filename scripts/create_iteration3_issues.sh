@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -z "${LINEAR_API_KEY:-}" ]]; then
-  echo "LINEAR_API_KEY is required" >&2
-  exit 1
-fi
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/dayflow_harness.sh"
 
-TEAM_ID="6f6e5287-d893-439d-981f-94d73ccd720a"
-PROJECT_ID="fdeb5f63-05f2-4ab2-bb9d-a12dc0084b9f"
-TODO_STATE_ID="452888e8-7d81-4229-bf16-d0876c3098a3"
+require_linear_api_key
+require_cmds jq curl
 
 QUERY=$(cat <<'EOF'
 mutation CreateIssue($team: String!, $project: String!, $state: String!, $title: String!, $description: String!) {
@@ -36,9 +32,9 @@ create_issue() {
 
   payload=$(jq -n \
     --arg query "$QUERY" \
-    --arg team "$TEAM_ID" \
-    --arg project "$PROJECT_ID" \
-    --arg state "$TODO_STATE_ID" \
+    --arg team "$DAYFLOW_LINEAR_TEAM_ID" \
+    --arg project "$DAYFLOW_LINEAR_PROJECT_ID" \
+    --arg state "$DAYFLOW_STATE_TODO_ID" \
     --arg title "$title" \
     --arg description "$description" \
     '{query: $query, variables: {team: $team, project: $project, state: $state, title: $title, description: $description}}')

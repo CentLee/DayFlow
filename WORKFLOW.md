@@ -42,6 +42,7 @@ Repository context:
 - Product and domain truth lives in `docs/`.
 - Agent routing and skills live in `.codex/agents/` and `.codex/skills/`.
 - DayFlow uses a semi-automated single-lane workflow. The primary agent keeps ownership of the issue through implementation, proof refresh, review follow-up, and merge readiness.
+- Model posture is tiered by agent role: product/integration/review should use high-capability reasoning models, while backend/iOS implementation should default to medium-capability coding models unless ambiguity or risk justifies escalation.
 
 Issue context:
 
@@ -75,6 +76,7 @@ Execution rules:
 14. The orchestration guardrail may promote an owned workspace from `Todo` to `In Progress` before the first PR exists. `Todo` is the only runnable queue state, so use it again only when the issue should be retried.
 15. Ignore generated artifacts such as `build/`, `DerivedData`, and `*.xcodeproj` unless the issue explicitly requires touching generated project files.
 16. Prefer source-file edits first; do not run heavy Xcode or simulator commands until the source diff is ready for validation.
+17. Match model strength to the agent role: use stronger models for design, contract, and review decisions; use medium models for scoped implementation once the contract is stable.
 
 Routing guide:
 

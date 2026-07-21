@@ -1,12 +1,25 @@
+# OS noise
 .DS_Store
+
+# Local secrets and machine-specific env
 .env
 .env.local
+.env.*
+
+# Build artifacts
 dist/
 build/
 .build/
 DerivedData/
+coverage.out
+
+# Xcode user-specific state
 *.xcuserstate
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
-coverage.out
+
+# Local Symphony runtime state
 .symphony/
+
+# Local review / ad-hoc HTML artifacts
+docs/*.html
