@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="/Users/kakao_ent/Documents/DayFlow"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/dayflow_harness.sh"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required" >&2
@@ -13,13 +13,14 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 1
 fi
 
+repo_slug="$(github_repo_slug)"
 pr_number="${1:-}"
 if [[ -z "$pr_number" ]]; then
-  pr_number=$(GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" gh pr view --json number -q '.number')
+  pr_number=$(GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" gh pr view -R "$repo_slug" --json number -q '.number')
 fi
 
-pr_json=$(GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" gh pr view "$pr_number" --json number,title,headRefName,baseRefName,files,comments)
-checks_output=$(GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" gh pr checks "$pr_number" 2>&1 || true)
+pr_json=$(GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" gh pr view -R "$repo_slug" "$pr_number" --json number,title,headRefName,baseRefName,files,comments)
+checks_output=$(GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" gh pr checks -R "$repo_slug" "$pr_number" 2>&1 || true)
 
 file_count=$(jq '.files | length' <<<"$pr_json")
 additions=$(jq '[.files[].additions // 0] | add // 0' <<<"$pr_json")

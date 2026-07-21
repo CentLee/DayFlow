@@ -36,7 +36,8 @@ has_fresh_requested_changes() {
   ' <<<"$pr_detail" >/dev/null
 }
 
-pr_list_json=$(GH_CONFIG_DIR="$GH_CONFIG_DIR" gh pr list --state open --limit 100 --json number,isDraft,headRefName,baseRefName)
+repo_slug="$(github_repo_slug)"
+pr_list_json=$(GH_CONFIG_DIR="$GH_CONFIG_DIR" gh pr list -R "$repo_slug" --state open --limit 100 --json number,isDraft,headRefName,baseRefName)
 
 while IFS= read -r pr_row; do
   branch=$(jq -r '.headRefName' <<<"$pr_row")
@@ -55,14 +56,14 @@ while IFS= read -r pr_row; do
   fi
 
   pr_number=$(jq -r '.number' <<<"$pr_row")
-  pr_detail=$(GH_CONFIG_DIR="$GH_CONFIG_DIR" gh pr view "$pr_number" --json reviews,commits,isDraft)
+  pr_detail=$(GH_CONFIG_DIR="$GH_CONFIG_DIR" gh pr view -R "$repo_slug" "$pr_number" --json reviews,commits,isDraft)
 
   if ! has_fresh_requested_changes "$pr_detail"; then
     continue
   fi
 
   if [[ "$(jq -r '.isDraft' <<<"$pr_detail")" != "true" ]]; then
-    GH_CONFIG_DIR="$GH_CONFIG_DIR" gh pr ready --undo "$pr_number" >/dev/null
+    GH_CONFIG_DIR="$GH_CONFIG_DIR" gh pr ready -R "$repo_slug" --undo "$pr_number" >/dev/null
   fi
 
   if [[ "$current_state" != "$DAYFLOW_STATE_TODO_NAME" ]]; then

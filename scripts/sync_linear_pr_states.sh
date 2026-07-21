@@ -23,9 +23,11 @@ find_issue_state_name() {
 
 sync_pr_group() {
   local pr_state="$1"
+  local repo_slug
   local prs_json issue_key issue_id current_state target_state branch
 
-  prs_json=$(GH_CONFIG_DIR="$GH_CONFIG_DIR" gh pr list --state "$pr_state" --limit 100 --json number,state,isDraft,headRefName,baseRefName)
+  repo_slug="$(github_repo_slug)"
+  prs_json=$(GH_CONFIG_DIR="$GH_CONFIG_DIR" gh pr list -R "$repo_slug" --state "$pr_state" --limit 100 --json number,state,isDraft,headRefName,baseRefName)
 
   while IFS= read -r pr_row; do
     branch=$(jq -r '.headRefName' <<<"$pr_row")

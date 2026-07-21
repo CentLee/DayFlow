@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="/Users/kakao_ent/Documents/DayFlow"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/dayflow_harness.sh"
 PROOF_SCRIPT="$ROOT_DIR/scripts/collect_pr_proof.sh"
-REPO_SLUG="CentLee/DayFlow"
 MAX_RETRIES="${MAX_RETRIES:-3}"
 RETRY_DELAY_SECONDS="${RETRY_DELAY_SECONDS:-2}"
 
@@ -35,7 +34,8 @@ retry() {
   done
 }
 
-prs_json=$(retry env GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" gh pr list --state open --limit 100 --json number,baseRefName)
+repo_slug="$(github_repo_slug)"
+prs_json=$(retry env GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" gh pr list -R "$repo_slug" --state open --limit 100 --json number,baseRefName)
 
 while IFS= read -r pr_row; do
   pr_number=$(jq -r '.number' <<<"$pr_row")
@@ -45,6 +45,6 @@ while IFS= read -r pr_row; do
 
   retry env GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" "$PROOF_SCRIPT" "$pr_number" >"$tmp_file"
   jq -Rs '{body: .}' <"$tmp_file" >"$json_file"
-  retry env GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" gh api "repos/${REPO_SLUG}/pulls/${pr_number}" -X PATCH --input "$json_file" >/dev/null
+  retry env GH_CONFIG_DIR="${GH_CONFIG_DIR:-$ROOT_DIR/.symphony/gh}" gh api "repos/${repo_slug}/pulls/${pr_number}" -X PATCH --input "$json_file" >/dev/null
   echo "updated proof-of-work for PR #${pr_number}"
 done < <(jq -c '.[]' <<<"$prs_json")

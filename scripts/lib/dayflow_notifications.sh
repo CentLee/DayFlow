@@ -80,3 +80,15 @@ notify_harness_runtime() {
     "$detail" \
     "$color"
 }
+
+notify_merge_ready() {
+  local issue_key="$1"
+  local pr_number="$2"
+  local pr_url="$3"
+  local detail="${4:-}"
+
+  send_discord_notification \
+    "DayFlow ${issue_key} merge-ready" \
+    "PR #${pr_number} is merge-ready.\n${detail}\n${pr_url}" \
+    5763719
+}
