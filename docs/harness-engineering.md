@@ -1,190 +1,56 @@
 # DayFlow Harness Engineering
 
-This document defines the DayFlow harness engineering baseline.
+The harness is maintained as product engineering infrastructure. Its purpose is to close small Linear issues with clear ownership, bounded model use, reproducible proof, and human-controlled merges.
 
-It borrows the strongest reusable ideas from the external Harness project while adapting them to the DayFlow Codex runtime, single-lane ownership model, and token-efficiency constraints.
+## Principles
 
-## Purpose
+### Audit Before Expansion
 
-DayFlow does not treat its harness as a one-time bootstrap artifact.
-The harness is part of the product engineering system and must evolve when:
+Compare agent definitions, skills, issue metadata, runner behavior, CI, and docs before adding a new layer. Remove conflicting rules instead of documenting both.
 
-- issue quality drifts
-- agent boundaries become ambiguous
-- token cost becomes wasteful
-- review loops become unreliable
-- docs and automation stop matching
+### One Lifecycle Owner
 
-## Adapted Principles
+Each issue has one Primary Agent. Sequential integration or review handoff is allowed; parallel fan-out is not the default. The owner returns for review remediation on the same session and branch.
 
-### 1. Audit Before Expansion
+### Models Follow Leverage
 
-Every harness change starts by auditing the current state before adding new agents, skills, or rules.
+Use `gpt-5.6-sol/high` for product, integration, and review decisions. Use `gpt-5.6-terra/medium` for bounded backend and iOS implementation. Deterministic Git, Linear, proof, and webhook operations use shell logic and no model tokens.
 
-Audit targets:
+### Fail Closed and Preserve Work
 
-- `.codex/agents/`
-- `.codex/skills/`
-- `WORKFLOW.md`
-- core docs in `docs/`
-- harness scripts in `scripts/`
+Admission, ownership, model, token, time, delivery, and review guards stop unsafe continuation. They do not erase worktrees or silently retry. Recovery is an explicit operator action.
 
-The first question is not "what should we add?"
-The first question is "what already exists, and where is it drifting?"
+### Progressive Disclosure
 
-### 2. Team Architecture Is a Design Choice
+Keep agent definitions and skills short. Put operational detail in `docs/local-runner.md`, deterministic behavior in `scripts/lib/dayflow_runner.sh`, and executable expectations in tests.
 
-DayFlow keeps a small, opinionated architecture instead of adding agents freely.
+### Local State Is Local
 
-Current preferred structure:
+Only logic and policy are tracked. Credentials, sessions, worktrees, logs, dedupe state, and machine configuration live under ignored `.dayflow/`.
 
-- one primary agent per issue
-- sequential handoff only when needed
-- review always happens before merge readiness
+## Maintenance Flow
 
-Harness patterns are still useful as a reasoning tool:
-
-- pipeline for dependent phases
-- producer-reviewer for implementation plus review
-- expert-pool thinking for selective consultation
-- supervisor thinking for outer-loop state reconciliation
-
-DayFlow does not adopt multi-agent fan-out inside a single issue by default because ownership clarity and token efficiency matter more than maximal parallelism.
-
-### 3. Stronger Models Belong at High-Leverage Decision Points
-
-Model selection is part of harness design, not an implementation detail.
-
-Use higher-capability models for:
-
-- product definition
-- contract alignment
-- review and risk detection
-- ambiguous architecture decisions
-
-Use medium-capability models for:
-
-- bounded backend implementation
-- bounded iOS implementation
-- predictable refactors
-- small follow-up fixes after review
-
-### 4. Progressive Disclosure Is Mandatory
-
-Keep the active prompt layer small.
-
-Rules:
-
-- short skill body first
-- deeper detail in `references/`
-- repetitive deterministic work in `scripts/`
-- avoid duplicating the same rules in agent files, skills, docs, and workflow unless the duplication serves a different runtime boundary
-
-### 5. Drift Must Be Treated as an Engineering Problem
-
-Drift includes:
-
-- docs no longer matching workflow behavior
-- workflow no longer matching scripts
-- agent boundaries no longer matching issue templates
-- skills mentioning files or rules that no longer exist
-- local-only runtime rules silently replacing repo truth
-
-Drift is not housekeeping.
-It is a reliability problem.
-
-### 6. Runtime Guardrails Should Reduce Retries, Not Hide Failures
-
-When a run fails, the harness should:
-
-1. stop wasteful repetition
-2. preserve useful artifacts
-3. restore correct ownership state
-4. signal whether the issue should retry, continue, or block
-
-The harness should not silently convert every failure into a fresh retry.
-
-### 7. Local Secrets and Runtime State Stay Out of Git
-
-DayFlow keeps runtime-local state out of version control.
-
-Examples:
-
-- `.symphony/gh/`
-- `.symphony/workspaces/`
-- `.symphony/notifications.env`
-- local auth/session material
-- generated runtime logs
-
-The repo should contain the harness logic and policy, not personal machine state.
-
-## Operating Modes
-
-Harness work should explicitly fall into one of three modes.
-
-### New Build
-
-Use when the repository has no meaningful harness structure yet.
-
-Expected work:
-
-- define agent set
-- define orchestrator
-- define core skills
-- define workflow rules
-
-### Existing Expansion
-
-Use when the harness exists and needs additional capability.
-
-Expected work:
-
-- add or adjust one agent
-- add or adjust one skill
-- update orchestrator routing
-- verify no overlap or drift is introduced
-
-### Maintenance / Audit
-
-Use when the harness is already in active use and needs correction, alignment, or cleanup.
-
-Expected work:
-
-- drift review
-- doc/script alignment
-- token-efficiency improvements
-- state-machine corrections
-- tracking policy cleanup
+1. Run `scripts/audit_harness_drift.sh`.
+2. Confirm the issue meets admission and one-PR scope.
+3. Change runtime behavior and authoritative docs together.
+4. Run `scripts/tests/run_dayflow_runner_tests.sh` and relevant product tests.
+5. Apply `docs/review-checklist.md` before declaring merge readiness.
 
 ## Required Repository Truth
 
-The following files define the DayFlow harness baseline and should stay aligned:
-
-- `WORKFLOW.md`
+- `AGENTS.md`
 - `docs/automation-model.md`
-- `docs/symphony-setup.md`
-- `docs/harness-skill-model.md`
+- `docs/local-runner.md`
+- `docs/failure-taxonomy.md`
+- `docs/git-tracking-policy.md`
 - `docs/review-checklist.md`
-- `.codex/skills/dayflow-orchestrator/SKILL.md`
-- `.codex/agents/*.md`
-- `scripts/run_symphony.sh`
-- state reconciliation and guard scripts in `scripts/`
-
-## Change Discipline
-
-When changing the harness:
-
-1. update the runtime behavior first if the current behavior is actively wasteful or incorrect
-2. update the authoritative docs in the same change
-3. keep local-only configuration out of git
-4. prefer removing duplicate rules over adding another copy
-5. verify shell syntax for any changed harness script
+- `.codex/agents/` and `.codex/skills/`
+- `scripts/dayflow_runner.sh`, its library, tests, and drift audit
 
 ## Non-Goals
 
-DayFlow harness engineering should not drift into:
-
-- generic multi-project framework design inside this repo
-- tool-specific hype without runtime payoff
-- large agent taxonomies that exceed the MVP scope
-- hidden local patches that are not reflected in repo policy
+- a generic multi-project orchestration platform
+- resident local services for issue pickup
+- hidden machine-only patches
+- automated merging without human approval
+- agent taxonomies larger than the MVP needs

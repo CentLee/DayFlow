@@ -1,48 +1,25 @@
 # DayFlow Local GitHub Auth
 
-Use repo-local GitHub CLI auth for DayFlow automation.
+DayFlow keeps GitHub CLI authentication inside the ignored runner directory so it does not overwrite the operator's global configuration.
 
-## Why
+## Local Store
 
-- this machine already uses global `gh` config for other work
-- DayFlow should not overwrite `~/.config/gh`
-- Symphony and Codex should use a repo-scoped auth store only
-
-## Local Config Directory
-
-DayFlow uses:
-
-- `/Users/kakao_ent/Documents/DayFlow/.symphony/gh`
-
-Symphony is configured to launch Codex with:
-
-- `GH_CONFIG_DIR=/Users/kakao_ent/Documents/DayFlow/.symphony/gh`
-
-That keeps GitHub CLI auth scoped to this repository's automation setup.
-
-## Login Command
-
-Run this from the DayFlow repo when you want to refresh GitHub auth for Symphony:
+The default path is `.dayflow/gh` in the repository root.
 
 ```bash
-mkdir -p /Users/kakao_ent/Documents/DayFlow/.symphony/gh
-GH_CONFIG_DIR=/Users/kakao_ent/Documents/DayFlow/.symphony/gh gh auth login -h github.com
+mkdir -p .dayflow/gh
+GH_CONFIG_DIR="$PWD/.dayflow/gh" gh auth login -h github.com
+GH_CONFIG_DIR="$PWD/.dayflow/gh" gh auth status -h github.com
 ```
 
-Or with a token:
+For token login:
 
 ```bash
-mkdir -p /Users/kakao_ent/Documents/DayFlow/.symphony/gh
-printf '%s' '<GITHUB_PAT>' | GH_CONFIG_DIR=/Users/kakao_ent/Documents/DayFlow/.symphony/gh gh auth login -h github.com --with-token
+printf '%s' '<GITHUB_PAT>' | GH_CONFIG_DIR="$PWD/.dayflow/gh" gh auth login -h github.com --with-token
 ```
 
-## Verification
+The runner automatically uses this directory. `GH_CONFIG_DIR` may override it for one invocation.
 
-```bash
-GH_CONFIG_DIR=/Users/kakao_ent/Documents/DayFlow/.symphony/gh gh auth status -h github.com
-```
+On first non-dry run, an existing `.symphony/gh` directory is copied to `.dayflow/gh` when the destination does not exist. The legacy source is never deleted because it also protects paused CEN-28 work.
 
-## Notes
-
-- do not run `gh auth setup-git` globally for this repo-only workflow
-- if push or PR creation is needed, ensure the local auth directory is valid first
+Do not run global GitHub auth setup as part of runner execution, and never commit either auth directory.

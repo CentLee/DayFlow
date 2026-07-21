@@ -8,14 +8,14 @@ DayFlow is a local-first monorepo for a shared calendar and personal-first month
 - API: Go
 - Database: PostgreSQL 16
 - Infra: Docker Compose
-- Workflow: Symphony + Linear + Codex
+- Workflow: Linear + DayFlow local runner + Codex
 
 ## Repository Layout
 
 - `apps/ios`: SwiftUI app skeleton and design notes
 - `services/api`: Go API skeleton, domain model, migrations
 - `infra/docker`: local Postgres
-- `docs`: product, domain, API, iOS, sync, Symphony docs
+- `docs`: product, domain, API, iOS, sync, and runner docs
 - `.codex/agents`: DayFlow-specific agent definitions
 - `.codex/skills`: DayFlow-specific adapter skills
 
@@ -36,7 +36,7 @@ DayFlow uses:
 
 - `main` for release-ready history
 - `develop` for integrated working state
-- `codex/<issue-id>-<short-slug>` for isolated issue work
+- `feature/tasks-<number>-<short-slug>` for isolated issue work
 
 Implementation PRs target `develop` and are normally squash-merged. `develop` is merged into `main`
 only after review and stabilization.
@@ -97,9 +97,9 @@ Open it in Xcode and create or wire an app target around the provided files.
 - Fixed item templates, variable buckets, billing reminders
 - Simple optimistic sync for budget edits
 
-## Symphony
+## Issue Runner
 
-See `WORKFLOW.md` and `docs/symphony-setup.md`.
+See `docs/local-runner.md` and `docs/automation-model.md`.
 
 Additional operating docs:
 
@@ -109,14 +109,13 @@ Additional operating docs:
 - `docs/review-checklist.md`
 - `docs/github-local-auth.md`
 
-### Recommended Run Command
+### Commands
 
-Use the wrapper below instead of launching Symphony directly. It keeps Linear states aligned with PR state.
+The runner executes one issue and exits. Merging remains manual.
 
 ```bash
-LINEAR_API_KEY=... scripts/run_symphony.sh
+LINEAR_API_KEY=... scripts/dayflow_runner.sh --dry-run run CEN-29
+LINEAR_API_KEY=... scripts/dayflow_runner.sh run CEN-29
+LINEAR_API_KEY=... scripts/dayflow_runner.sh status CEN-29
+LINEAR_API_KEY=... scripts/dayflow_runner.sh reconcile CEN-29
 ```
-
-Dashboard:
-
-- lifecycle-owner lane: `http://127.0.0.1:4100/`

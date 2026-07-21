@@ -2,7 +2,7 @@
 
 ## Purpose
 
-DayFlow reached a stage where Symphony could start work, open PRs, and trigger review, but the
+DayFlow reached a stage where a resident external runner could start work, open PRs, and trigger review, but the
 full lifecycle still needed manual rescue. This document records the concrete failures seen during
 `CEN-11` and `CEN-12` so the workflow can be simplified before more feature work continues.
 
@@ -58,7 +58,6 @@ full lifecycle still needed manual rescue. This document records the concrete fa
 - `docs/api-contract.md` should describe today's served or mocked contract
 - forward-looking gaps belong in explicit notes or follow-up issues
 
-## Immediate Consequence
+## Implemented Consequence
 
-Before starting `CEN-13`, DayFlow should run a single lifecycle-owner lane plus background
-state/proof reconciliation. Review remains required, but not as a separate long-lived ownership lane.
+DayFlow now uses one explicit `scripts/dayflow_runner.sh` invocation per issue. The command owns bounded execution, proof validation, review remediation, and deterministic reconciliation, then exits. Review remains required without a separate resident lane.

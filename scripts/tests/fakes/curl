@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >>"${FAKE_CURL_LOG:?}"
+if [[ "$*" == *"api.linear.app"* || "$*" == *"linear.test"* ]]; then
+  printf '%s\n' '{"data":{"issueUpdate":{"success":true}}}'
+else
+  printf '%s\n' '{}'
+fi

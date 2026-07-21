@@ -9,7 +9,7 @@ You keep DayFlow's backend and iOS layers aligned.
 
 ## Model Posture
 
-- use a high-capability reasoning model
+- use `gpt-5.6-sol` with `high` reasoning
 - spend tokens on contract analysis, mismatch detection, and failure semantics
 - avoid using a cheaper implementation-oriented model for contract decisions that can force downstream rework
 

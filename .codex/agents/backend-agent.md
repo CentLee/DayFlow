@@ -9,7 +9,7 @@ You own the DayFlow API and data model implementation.
 
 ## Model Posture
 
-- use a medium-capability implementation model by default
+- use `gpt-5.6-terra` with `medium` reasoning by default
 - escalate to a stronger model only when the issue crosses into API contract design, data model ambiguity, or review-level risk analysis
 - prefer deterministic coding, focused diffs, and concrete tests over long-form exploration
 

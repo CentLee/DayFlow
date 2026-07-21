@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >>"${FAKE_GH_LOG:?}"
+
+proof_body='## Summary
+
+- Fake delivery.
+
+## Changed files
+
+- runner-result.txt
+
+## Behavior implemented
+
+- Implemented the fixture path.
+
+## Tests run
+
+- Fake test suite.
+
+## Review feedback addressed
+
+- No unresolved findings.
+
+## Complexity snapshot
+
+- One fixture file.
+
+## Risks or follow-ups
+
+- None.
+
+## Next suggested issue
+
+- CEN-28.'
+
+if [[ "${1:-}" != "pr" ]]; then
+  exit 2
+fi
+shift
+case "${1:-}" in
+  list)
+    draft=true
+    [[ -f "${FAKE_GH_READY_FILE:?}" ]] && draft=false
+    state="OPEN"
+    for arg in "$@"; do
+      [[ "$arg" == "all" ]] || continue
+      state="${FAKE_GH_PR_STATE:-OPEN}"
+    done
+    jq -n --arg body "$proof_body" --argjson draft "$draft" --arg state "$state" \
+      '[{number: 29, url: "https://github.test/pr/29", isDraft: $draft, state: $state, headRefName: "feature/tasks-29-replace-symphony-with-dayflow-local-runner", headRefOid: "fake-head-sha", baseRefName: "develop", body: $body}]'
+    ;;
+  ready)
+    if [[ "$*" == *"--undo"* ]]; then
+      rm -f "${FAKE_GH_READY_FILE:?}"
+    else
+      : >"${FAKE_GH_READY_FILE:?}"
+    fi
+    ;;
+  checks)
+    printf '%s\n' '[{"bucket":"pass","name":"Harness CI","state":"SUCCESS"}]'
+    ;;
+  view)
+    printf '%s\n' '{"reviews":[],"commits":[{"committedDate":"2026-07-22T00:00:00Z"}]}'
+    ;;
+  comment)
+    :
+    ;;
+  *)
+    exit 2
+    ;;
+esac
