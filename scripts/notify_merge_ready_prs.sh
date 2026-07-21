@@ -85,9 +85,12 @@ pr_list_json="$(GH_CONFIG_DIR="$GH_CONFIG_DIR" gh pr list -R "$repo_slug" --stat
 while IFS= read -r pr_row; do
   local_branch="$(jq -r '.headRefName' <<<"$pr_row")"
   pr_number="$(jq -r '.number' <<<"$pr_row")"
+  notification_key=""
 
-  if ! issue_key="$(extract_issue_key "$local_branch")"; then
-    continue
+  if issue_key="$(extract_issue_key "$local_branch" 2>/dev/null)"; then
+    notification_key="$issue_key"
+  else
+    notification_key="PR-${pr_number}"
   fi
 
   pr_detail="$(
@@ -108,10 +111,10 @@ while IFS= read -r pr_row; do
   base_branch="$(jq -r '.baseRefName' <<<"$pr_detail")"
   pr_url="$(jq -r '.url' <<<"$pr_detail")"
   notify_merge_ready \
-    "$issue_key" \
+    "$notification_key" \
     "$pr_number" \
     "$pr_url" \
     "Branch: \`${local_branch}\`\nBase: \`${base_branch}\`\nHead: \`${head_sha:0:12}\`"
-  record_merge_ready_notification "$pr_number" "$issue_key" "$local_branch" "$head_sha"
-  echo "sent merge-ready notification for ${issue_key} PR #${pr_number}"
+  record_merge_ready_notification "$pr_number" "$notification_key" "$local_branch" "$head_sha"
+  echo "sent merge-ready notification for ${notification_key} PR #${pr_number}"
 done < <(jq -c '.[]' <<<"$pr_list_json")
