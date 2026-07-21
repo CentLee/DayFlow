@@ -23,8 +23,8 @@ func TestMemoryStoreCalendarPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create calendar: %v", err)
 	}
-	if created.Role != RoleOwner {
-		t.Fatalf("expected owner role, got %s", created.Role)
+	if created.Kind != CalendarKindShared {
+		t.Fatalf("expected shared calendar kind, got %s", created.Kind)
 	}
 
 	if err := repo.DeleteCalendar("usr_001", created.ID); err != nil {
@@ -119,6 +119,80 @@ func TestMemoryStoreEventCRUDAndFiltering(t *testing.T) {
 	}
 	if _, err := repo.ListEvents("usr_004", "cal_002", nil, nil); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("expected outsider access to be forbidden, got %v", err)
+	}
+}
+
+func TestMemoryStoreInviteCreationAndAcceptance(t *testing.T) {
+	repo := NewMemoryStore()
+
+	invite, err := repo.CreateInvite("usr_001", "cal_002", InviteInput{
+		Email:           "outside@dayflow.local",
+		DeliveryChannel: "sms",
+		Role:            RoleEditor,
+	})
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+	if invite.CalendarID != "cal_002" || invite.Role != RoleEditor || invite.DeliveryChannel != "sms" {
+		t.Fatalf("unexpected invite payload %#v", invite)
+	}
+
+	if _, err := repo.ListEvents("usr_004", "cal_002", nil, nil); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected outsider access before accept, got %v", err)
+	}
+
+	accepted, err := repo.AcceptInvite("usr_004", invite.InviteCode)
+	if err != nil {
+		t.Fatalf("accept invite: %v", err)
+	}
+	if accepted.AcceptedByUserID != "usr_004" || accepted.AcceptedAt == "" {
+		t.Fatalf("expected accepted invite metadata, got %#v", accepted)
+	}
+
+	calendars := repo.ListCalendars("usr_004")
+	if len(calendars) != 1 || calendars[0].ID != "cal_002" || calendars[0].MembershipRole != RoleEditor {
+		t.Fatalf("expected accepted membership on cal_002 as editor, got %#v", calendars)
+	}
+
+	start := time.Date(2026, 3, 18, 9, 0, 0, 0, time.UTC)
+	created, err := repo.CreateEvent("usr_004", "cal_002", EventInput{
+		Title:    "Editor accepted",
+		StartsAt: start,
+		EndsAt:   start.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("expected editor event create after accept, got %v", err)
+	}
+	if created.CalendarID != "cal_002" {
+		t.Fatalf("unexpected event after accept %#v", created)
+	}
+
+	if _, err := repo.AcceptInvite("usr_003", invite.InviteCode); !errors.Is(err, ErrInviteEmailMismatch) {
+		t.Fatalf("expected email mismatch on wrong acceptor, got %v", err)
+	}
+}
+
+func TestMemoryStoreInviteCreationRequiresOwner(t *testing.T) {
+	repo := NewMemoryStore()
+
+	if _, err := repo.CreateInvite("usr_002", "cal_002", InviteInput{
+		Email:           "outside@dayflow.local",
+		DeliveryChannel: "email",
+		Role:            RoleViewer,
+	}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected editor invite creation to be forbidden, got %v", err)
+	}
+}
+
+func TestMemoryStoreInviteCreationRejectsPersonalCalendar(t *testing.T) {
+	repo := NewMemoryStore()
+
+	if _, err := repo.CreateInvite("usr_001", "cal_001", InviteInput{
+		Email:           "outside@dayflow.local",
+		DeliveryChannel: "sms",
+		Role:            RoleViewer,
+	}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected personal calendar invite to be rejected, got %v", err)
 	}
 }
 

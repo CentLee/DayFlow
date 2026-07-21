@@ -17,9 +17,11 @@ import (
 )
 
 const (
-	RoleOwner  = "owner"
-	RoleEditor = "editor"
-	RoleViewer = "viewer"
+	RoleOwner            = "owner"
+	RoleEditor           = "editor"
+	RoleViewer           = "viewer"
+	CalendarKindPersonal = "personal"
+	CalendarKindShared   = "shared"
 )
 
 var (
@@ -37,6 +39,12 @@ var (
 type CalendarInput struct {
 	Name  string
 	Color string
+}
+
+type InviteInput struct {
+	Email           string
+	DeliveryChannel string
+	Role            string
 }
 
 type CalendarPatch struct {
@@ -67,10 +75,7 @@ type storedUser struct {
 }
 
 type invite struct {
-	Code              string
-	Email             string
-	SharedCalendarIDs []string
-	Role              string
+	Invite domain.CalendarInvite
 }
 
 type calendarRecord struct {
@@ -96,6 +101,7 @@ type MemoryStore struct {
 	budgetTemplates map[string]domain.BudgetTemplates
 	counter         int
 	nextCalendarSeq int
+	nextInviteSeq   int
 	nextEventSeq    int
 	nextBudgetSeq   int
 	monthKey        string
@@ -120,6 +126,7 @@ func NewMemoryStore() *MemoryStore {
 		budgetTemplates: make(map[string]domain.BudgetTemplates),
 		counter:         4,
 		nextCalendarSeq: 3,
+		nextInviteSeq:   2,
 		nextEventSeq:    3,
 		nextBudgetSeq:   1,
 		monthKey:        monthKey,
@@ -164,8 +171,8 @@ func NewMemoryStore() *MemoryStore {
 		CurrentBudgetMonthKey: monthKey,
 	})
 
-	personalCalendar := domain.Calendar{ID: "cal_001", Name: "Personal", Color: "#1F6B5C", UpdatedAt: now}
-	sharedCalendar := domain.Calendar{ID: "cal_002", Name: "Shared Home", Color: "#D8A21D", UpdatedAt: now}
+	personalCalendar := domain.Calendar{ID: "cal_001", Kind: CalendarKindPersonal, Name: "Personal", Color: "#1F6B5C", UpdatedAt: now}
+	sharedCalendar := domain.Calendar{ID: "cal_002", Kind: CalendarKindShared, Name: "Shared Home", Color: "#D8A21D", UpdatedAt: now}
 	store.calendars[personalCalendar.ID] = calendarRecord{Calendar: personalCalendar, OwnerUserID: "usr_001"}
 	store.calendars[sharedCalendar.ID] = calendarRecord{Calendar: sharedCalendar, OwnerUserID: "usr_001"}
 	store.calendarMembers[personalCalendar.ID] = map[string]string{"usr_001": RoleOwner}
@@ -174,6 +181,9 @@ func NewMemoryStore() *MemoryStore {
 		"usr_002": RoleEditor,
 		"usr_003": RoleViewer,
 	}
+	store.provisionPersonalCalendarLocked("usr_002", "#5B7FFF")
+	store.provisionPersonalCalendarLocked("usr_003", "#A657D6")
+	store.provisionPersonalCalendarLocked("usr_004", "#FF7A59")
 
 	store.events["evt_001"] = eventRecord{
 		Event: domain.Event{
@@ -203,10 +213,20 @@ func NewMemoryStore() *MemoryStore {
 	}
 
 	store.invites["invite_abc"] = invite{
-		Code:              "invite_abc",
-		Email:             "user@example.com",
-		SharedCalendarIDs: []string{"cal_002"},
-		Role:              RoleViewer,
+		Invite: domain.CalendarInvite{
+			ID:                   "cinv_001",
+			CalendarID:           "cal_002",
+			CalendarName:         "Shared Home",
+			Email:                "user@example.com",
+			DeliveryChannel:      "sms",
+			Role:                 RoleViewer,
+			InviteCode:           "invite_abc",
+			InviteURL:            "https://dayflow.local/invites/invite_abc",
+			InvitedByUserID:      "usr_001",
+			InvitedByDisplayName: "DayFlow Owner",
+			ExpiresAt:            nowFunc().Add(7 * 24 * time.Hour).Format(time.RFC3339),
+			UpdatedAt:            now,
+		},
 	}
 
 	return store
@@ -215,6 +235,21 @@ func NewMemoryStore() *MemoryStore {
 func (s *MemoryStore) mustSeedUser(user storedUser) {
 	s.users[normalizeEmail(user.User.Email)] = user
 	s.userIDs[user.User.ID] = normalizeEmail(user.User.Email)
+}
+
+func (s *MemoryStore) provisionPersonalCalendarLocked(userID, color string) domain.Calendar {
+	calendarID := fmt.Sprintf("cal_%03d", s.nextCalendarSeq)
+	s.nextCalendarSeq++
+	calendar := domain.Calendar{
+		ID:        calendarID,
+		Kind:      CalendarKindPersonal,
+		Name:      "Personal",
+		Color:     color,
+		UpdatedAt: s.now().Format(time.RFC3339),
+	}
+	s.calendars[calendarID] = calendarRecord{Calendar: calendar, OwnerUserID: userID}
+	s.calendarMembers[calendarID] = map[string]string{userID: RoleOwner}
+	return calendar
 }
 
 func (s *MemoryStore) Register(email, displayName, password, inviteCode string) (domain.User, string, error) {
@@ -226,7 +261,7 @@ func (s *MemoryStore) Register(email, displayName, password, inviteCode string) 
 	if !ok {
 		return domain.User{}, "", ErrInvalidInvite
 	}
-	if normalizeEmail(inviteRecord.Email) != normalizedEmail {
+	if normalizeEmail(inviteRecord.Invite.Email) != normalizedEmail {
 		return domain.User{}, "", ErrInviteEmailMismatch
 	}
 	if _, exists := s.users[normalizedEmail]; exists {
@@ -246,16 +281,14 @@ func (s *MemoryStore) Register(email, displayName, password, inviteCode string) 
 	}
 	s.users[normalizedEmail] = stored
 	s.userIDs[user.ID] = normalizedEmail
-	for _, calendarID := range inviteRecord.SharedCalendarIDs {
-		if members, ok := s.calendarMembers[calendarID]; ok {
-			role := inviteRecord.Role
-			if role == "" {
-				role = RoleViewer
-			}
-			members[user.ID] = role
-		}
+	personalCalendar := s.provisionPersonalCalendarLocked(user.ID, "#5B7FFF")
+	if _, err := s.acceptInviteLocked(user.ID, normalizedEmail, inviteCode); err != nil {
+		delete(s.users, normalizedEmail)
+		delete(s.userIDs, user.ID)
+		delete(s.calendars, personalCalendar.ID)
+		delete(s.calendarMembers, personalCalendar.ID)
+		return domain.User{}, "", err
 	}
-	delete(s.invites, inviteCode)
 
 	token := newToken()
 	s.sessions[token] = user.ID
@@ -318,7 +351,116 @@ func (s *MemoryStore) ListCalendars(userID string) []domain.Calendar {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.listCalendarsLocked(userID)
+	return s.listSharedCalendarsLocked(userID)
+}
+
+func (s *MemoryStore) CreateInvite(userID, calendarID string, input InviteInput) (domain.CalendarInvite, error) {
+	if err := validateInviteInput(input); err != nil {
+		return domain.CalendarInvite{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	record, role, err := s.calendarForMutationLocked(userID, calendarID)
+	if err != nil {
+		return domain.CalendarInvite{}, err
+	}
+	if role != RoleOwner || record.OwnerUserID != userID {
+		return domain.CalendarInvite{}, ErrForbidden
+	}
+	if record.Calendar.Kind != CalendarKindShared {
+		return domain.CalendarInvite{}, fmt.Errorf("invites are allowed only for shared calendars: %w", ErrInvalidInput)
+	}
+
+	normalizedEmail := normalizeEmail(input.Email)
+	if owner, ok := s.userByIDLocked(record.OwnerUserID); ok && normalizeEmail(owner.User.Email) == normalizedEmail {
+		return domain.CalendarInvite{}, fmt.Errorf("calendar owner cannot be invited: %w", ErrInvalidInput)
+	}
+	for memberUserID := range s.calendarMembers[calendarID] {
+		member, ok := s.userByIDLocked(memberUserID)
+		if ok && normalizeEmail(member.User.Email) == normalizedEmail {
+			return domain.CalendarInvite{}, fmt.Errorf("user is already a calendar member: %w", ErrInvalidInput)
+		}
+	}
+
+	for code, existing := range s.invites {
+		if existing.Invite.CalendarID != calendarID || normalizeEmail(existing.Invite.Email) != normalizedEmail {
+			continue
+		}
+		if existing.Invite.AcceptedByUserID != "" {
+			continue
+		}
+		existing.Invite.Role = input.Role
+		existing.Invite.DeliveryChannel = input.DeliveryChannel
+		existing.Invite.UpdatedAt = s.now().Format(time.RFC3339)
+		s.invites[code] = existing
+		return existing.Invite, nil
+	}
+
+	createdInvite := domain.CalendarInvite{
+		ID:              fmt.Sprintf("cinv_%03d", s.nextInviteSeq),
+		CalendarID:      calendarID,
+		CalendarName:    record.Calendar.Name,
+		Email:           normalizedEmail,
+		DeliveryChannel: input.DeliveryChannel,
+		Role:            input.Role,
+		InvitedByUserID: userID,
+		ExpiresAt:       s.now().Add(7 * 24 * time.Hour).Format(time.RFC3339),
+		UpdatedAt:       s.now().Format(time.RFC3339),
+	}
+	createdInvite.InviteCode = s.nextInviteCodeLocked()
+	createdInvite.InviteURL = fmt.Sprintf("https://dayflow.local/invites/%s", createdInvite.InviteCode)
+	if inviter, ok := s.userByIDLocked(userID); ok {
+		createdInvite.InvitedByDisplayName = inviter.User.DisplayName
+	}
+	s.nextInviteSeq++
+	s.invites[createdInvite.InviteCode] = invite{Invite: createdInvite}
+	return createdInvite, nil
+}
+
+func (s *MemoryStore) PreviewInvite(inviteCode string) (domain.CalendarInvite, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	inviteRecord, ok := s.invites[inviteCode]
+	if !ok {
+		return domain.CalendarInvite{}, ErrInvalidInvite
+	}
+	return inviteRecord.Invite, nil
+}
+
+func (s *MemoryStore) AcceptInvite(userID, inviteCode string) (domain.CalendarInvite, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stored, ok := s.userByIDLocked(userID)
+	if !ok {
+		return domain.CalendarInvite{}, ErrForbidden
+	}
+	return s.acceptInviteLocked(userID, stored.User.Email, inviteCode)
+}
+
+func (s *MemoryStore) AcceptInviteCalendar(userID, inviteCode string) (domain.Calendar, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stored, ok := s.userByIDLocked(userID)
+	if !ok {
+		return domain.Calendar{}, ErrForbidden
+	}
+	inviteRecord, err := s.acceptInviteLocked(userID, stored.User.Email, inviteCode)
+	if err != nil {
+		return domain.Calendar{}, err
+	}
+
+	record, ok := s.calendars[inviteRecord.CalendarID]
+	if !ok {
+		return domain.Calendar{}, ErrNotFound
+	}
+	calendar := record.Calendar
+	calendar.MembershipRole = inviteRecord.Role
+	return calendar, nil
 }
 
 func (s *MemoryStore) CreateCalendar(userID string, input CalendarInput) (domain.Calendar, error) {
@@ -337,9 +479,9 @@ func (s *MemoryStore) CreateCalendar(userID string, input CalendarInput) (domain
 	s.nextCalendarSeq++
 	calendar := domain.Calendar{
 		ID:        id,
+		Kind:      CalendarKindShared,
 		Name:      strings.TrimSpace(input.Name),
 		Color:     strings.ToUpper(strings.TrimSpace(input.Color)),
-		Role:      RoleOwner,
 		UpdatedAt: s.now().Format(time.RFC3339),
 	}
 	s.calendars[id] = calendarRecord{Calendar: calendar, OwnerUserID: userID}
@@ -373,7 +515,7 @@ func (s *MemoryStore) UpdateCalendar(userID, calendarID string, patch CalendarPa
 		}
 		record.Calendar.Color = color
 	}
-	record.Calendar.Role = role
+	record.Calendar.MembershipRole = role
 	record.Calendar.UpdatedAt = s.now().Format(time.RFC3339)
 	s.calendars[calendarID] = record
 	return record.Calendar, nil
@@ -719,13 +861,50 @@ func (s *MemoryStore) meForUserIDLocked(userID string) (domain.Me, bool) {
 	if !ok {
 		return domain.Me{}, false
 	}
-	owned, shared := s.splitCalendarsForUserLocked(userID)
+	personal, shared := s.splitCalendarsForUserLocked(userID)
 	return domain.Me{
 		User:                  stored.User,
-		OwnedCalendars:        owned,
+		PersonalCalendar:      personal,
 		SharedCalendars:       shared,
 		CurrentBudgetMonthKey: stored.CurrentBudgetMonthKey,
 	}, true
+}
+
+func (s *MemoryStore) acceptInviteLocked(userID, email, inviteCode string) (domain.CalendarInvite, error) {
+	inviteRecord, ok := s.invites[inviteCode]
+	if !ok {
+		return domain.CalendarInvite{}, ErrInvalidInvite
+	}
+	if normalizeEmail(inviteRecord.Invite.Email) != normalizeEmail(email) {
+		return domain.CalendarInvite{}, ErrInviteEmailMismatch
+	}
+	if inviteRecord.Invite.AcceptedByUserID != "" {
+		if inviteRecord.Invite.AcceptedByUserID != userID {
+			return domain.CalendarInvite{}, ErrInvalidInvite
+		}
+		return inviteRecord.Invite, nil
+	}
+	if _, ok := s.calendars[inviteRecord.Invite.CalendarID]; !ok {
+		return domain.CalendarInvite{}, ErrNotFound
+	}
+	role := inviteRecord.Invite.Role
+	if role == "" {
+		role = RoleViewer
+	}
+	if _, ok := s.calendarMembers[inviteRecord.Invite.CalendarID]; !ok {
+		s.calendarMembers[inviteRecord.Invite.CalendarID] = make(map[string]string)
+	}
+	if currentRole, ok := s.calendarMembers[inviteRecord.Invite.CalendarID][userID]; ok && currentRole == RoleOwner {
+		return domain.CalendarInvite{}, fmt.Errorf("calendar owner cannot accept invite: %w", ErrInvalidInput)
+	}
+	s.calendarMembers[inviteRecord.Invite.CalendarID][userID] = role
+	now := s.now().Format(time.RFC3339)
+	inviteRecord.Invite.Role = role
+	inviteRecord.Invite.AcceptedByUserID = userID
+	inviteRecord.Invite.AcceptedAt = now
+	inviteRecord.Invite.UpdatedAt = now
+	s.invites[inviteCode] = inviteRecord
+	return inviteRecord.Invite, nil
 }
 
 func (s *MemoryStore) userByIDLocked(userID string) (storedUser, bool) {
@@ -745,7 +924,7 @@ func (s *MemoryStore) listCalendarsLocked(userID string) []domain.Calendar {
 			continue
 		}
 		calendar := s.calendars[calendarID].Calendar
-		calendar.Role = role
+		calendar.MembershipRole = role
 		items = append(items, calendar)
 	}
 	sort.Slice(items, func(i, j int) bool {
@@ -754,18 +933,30 @@ func (s *MemoryStore) listCalendarsLocked(userID string) []domain.Calendar {
 	return items
 }
 
-func (s *MemoryStore) splitCalendarsForUserLocked(userID string) ([]domain.Calendar, []domain.Calendar) {
-	owned := make([]domain.Calendar, 0)
+func (s *MemoryStore) listSharedCalendarsLocked(userID string) []domain.Calendar {
 	shared := make([]domain.Calendar, 0)
 	for _, calendar := range s.listCalendarsLocked(userID) {
-		record := s.calendars[calendar.ID]
-		if record.OwnerUserID == userID {
-			owned = append(owned, calendar)
+		if calendar.Kind == CalendarKindPersonal {
 			continue
 		}
 		shared = append(shared, calendar)
 	}
-	return owned, shared
+	return shared
+}
+
+func (s *MemoryStore) splitCalendarsForUserLocked(userID string) (domain.Calendar, []domain.Calendar) {
+	var personal domain.Calendar
+	shared := make([]domain.Calendar, 0)
+	for _, calendar := range s.listCalendarsLocked(userID) {
+		if calendar.Kind == CalendarKindPersonal {
+			calendar.MembershipRole = ""
+			personal = calendar
+			continue
+		}
+		calendar.MembershipRole = ""
+		shared = append(shared, calendar)
+	}
+	return personal, shared
 }
 
 func (s *MemoryStore) calendarForAccessLocked(userID, calendarID string) (calendarRecord, string, error) {
@@ -794,6 +985,19 @@ func validateCalendarInput(input CalendarInput) error {
 	color := strings.ToUpper(strings.TrimSpace(input.Color))
 	if !calendarColorPattern.MatchString(color) {
 		return fmt.Errorf("calendar color must be #RRGGBB: %w", ErrInvalidInput)
+	}
+	return nil
+}
+
+func validateInviteInput(input InviteInput) error {
+	if normalizeEmail(input.Email) == "" {
+		return fmt.Errorf("invite email is required: %w", ErrInvalidInput)
+	}
+	if input.DeliveryChannel != "email" && input.DeliveryChannel != "sms" {
+		return fmt.Errorf("delivery_channel must be email or sms: %w", ErrInvalidInput)
+	}
+	if input.Role != RoleEditor && input.Role != RoleViewer {
+		return fmt.Errorf("invite role must be editor or viewer: %w", ErrInvalidInput)
 	}
 	return nil
 }
@@ -828,6 +1032,10 @@ func validateEventRecord(event domain.Event) error {
 
 func canEditEvents(role string) bool {
 	return role == RoleOwner || role == RoleEditor
+}
+
+func (s *MemoryStore) nextInviteCodeLocked() string {
+	return fmt.Sprintf("invite_%03d", s.nextInviteSeq)
 }
 
 func cloneBudgetBoard(board domain.BudgetBoard) domain.BudgetBoard {
