@@ -237,6 +237,20 @@ func (s *MemoryStore) mustSeedUser(user storedUser) {
 	s.userIDs[user.User.ID] = normalizeEmail(user.User.Email)
 }
 
+func (s *MemoryStore) SeedUsers() []domain.User {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	users := make([]domain.User, 0, len(s.users))
+	for _, stored := range s.users {
+		users = append(users, stored.User)
+	}
+	sort.Slice(users, func(i, j int) bool {
+		return users[i].ID < users[j].ID
+	})
+	return users
+}
+
 func (s *MemoryStore) provisionPersonalCalendarLocked(userID, color string) domain.Calendar {
 	calendarID := fmt.Sprintf("cal_%03d", s.nextCalendarSeq)
 	s.nextCalendarSeq++

@@ -14,10 +14,10 @@ import (
 )
 
 type Router struct {
-	store *store.MemoryStore
+	store store.Repository
 }
 
-func NewRouter(store *store.MemoryStore) http.Handler {
+func NewRouter(store store.Repository) http.Handler {
 	r := &Router{store: store}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", r.handleHealth)

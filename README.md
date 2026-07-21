@@ -70,6 +70,19 @@ cd services/api
 go run ./cmd/dayflow-api
 ```
 
+Environment modes:
+
+- default local mode: in-memory store
+- system-test mode: set `DAYFLOW_STORE_MODE=hybrid` and `DAYFLOW_DATABASE_URL=...` to keep auth/calendar in memory while exercising budget storage against PostgreSQL
+
+### 2a. Run API System Tests
+
+```bash
+scripts/run_api_system_tests.sh
+```
+
+This boots the API and PostgreSQL together through Docker Compose with a fixed test environment and then runs black-box API checks.
+
 ### 3. iOS App
 
 The iOS app scaffold lives in `apps/ios`. The repo includes SwiftUI source structure and a project spec placeholder.

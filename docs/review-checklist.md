@@ -30,6 +30,7 @@ Every PR must be reviewed with this checklist.
 
 - were behavior-changing code paths tested?
 - are failure paths covered?
+- when API behavior changed, was the compose-controlled system test stage run against the live server?
 - is any missing test explicitly called out?
 
 ## Required Review Output
