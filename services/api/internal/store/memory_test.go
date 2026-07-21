@@ -177,6 +177,35 @@ func TestMemoryStoreInviteCreationAndAcceptance(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreReusesPendingInviteForSameCalendarAndEmail(t *testing.T) {
+	repo := NewMemoryStore()
+
+	first, err := repo.CreateInvite("usr_001", "cal_002", InviteInput{
+		Email:           "guest@dayflow.local",
+		DeliveryChannel: "email",
+		Role:            RoleViewer,
+	})
+	if err != nil {
+		t.Fatalf("create first invite: %v", err)
+	}
+
+	second, err := repo.CreateInvite("usr_001", "cal_002", InviteInput{
+		Email:           "guest@dayflow.local",
+		DeliveryChannel: "sms",
+		Role:            RoleEditor,
+	})
+	if err != nil {
+		t.Fatalf("reuse invite: %v", err)
+	}
+
+	if second.ID != first.ID || second.InviteCode != first.InviteCode {
+		t.Fatalf("expected pending invite reuse, got first=%#v second=%#v", first, second)
+	}
+	if second.DeliveryChannel != "sms" || second.Role != RoleEditor {
+		t.Fatalf("expected pending invite to refresh role/channel, got %#v", second)
+	}
+}
+
 func TestMemoryStoreInviteCreationRequiresOwner(t *testing.T) {
 	repo := NewMemoryStore()
 
@@ -223,6 +252,32 @@ func TestMemoryStoreInvitePreviewAndAcceptRejectNonSharedTargets(t *testing.T) {
 	}
 	if _, err := repo.AcceptInvite("usr_004", "invite_personal"); !errors.Is(err, ErrInvalidInvite) {
 		t.Fatalf("expected personal-calendar invite accept to be invalid, got %v", err)
+	}
+}
+
+func TestMemoryStoreRegisterRejectsInviteForDeletedSharedCalendar(t *testing.T) {
+	repo := NewMemoryStore()
+
+	created, err := repo.CreateCalendar("usr_001", CalendarInput{Name: "Temporary Share", Color: "#224466"})
+	if err != nil {
+		t.Fatalf("create calendar: %v", err)
+	}
+
+	invite, err := repo.CreateInvite("usr_001", created.ID, InviteInput{
+		Email:           "newuser@dayflow.local",
+		DeliveryChannel: "email",
+		Role:            RoleViewer,
+	})
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+
+	if err := repo.DeleteCalendar("usr_001", created.ID); err != nil {
+		t.Fatalf("delete calendar: %v", err)
+	}
+
+	if _, _, err := repo.Register("newuser@dayflow.local", "Late Joiner", "secret1234", invite.InviteCode); !errors.Is(err, ErrInvalidInvite) {
+		t.Fatalf("expected deleted-calendar invite registration to fail, got %v", err)
 	}
 }
 

@@ -76,6 +76,60 @@ func TestRegisterRejectsInvalidInvite(t *testing.T) {
 	}
 }
 
+func TestRegisterRejectsInviteForDeletedSharedCalendar(t *testing.T) {
+	repo := store.NewMemoryStore()
+	handler := NewRouter(repo)
+	ownerToken := loginTokenForUser(t, handler, "owner@dayflow.local", "secret1234")
+
+	createCalendarRec := performAuthedJSONRequest(t, handler, ownerToken, http.MethodPost, "/v1/calendars", map[string]any{
+		"name":  "Temporary Share",
+		"color": "#224466",
+	})
+	if createCalendarRec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d body=%s", createCalendarRec.Code, createCalendarRec.Body.String())
+	}
+
+	var createdCalendar struct {
+		ID string `json:"id"`
+	}
+	decodeResponse(t, createCalendarRec, &createdCalendar)
+	if createdCalendar.ID == "" {
+		t.Fatal("expected created calendar id")
+	}
+
+	createInviteRec := performAuthedJSONRequest(t, handler, ownerToken, http.MethodPost, "/v1/calendars/"+createdCalendar.ID+"/invites", map[string]any{
+		"email":            "newuser@dayflow.local",
+		"delivery_channel": "email",
+		"role":             "viewer",
+	})
+	if createInviteRec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d body=%s", createInviteRec.Code, createInviteRec.Body.String())
+	}
+
+	var inviteBody struct {
+		InviteCode string `json:"invite_code"`
+	}
+	decodeResponse(t, createInviteRec, &inviteBody)
+	if inviteBody.InviteCode == "" {
+		t.Fatal("expected invite code")
+	}
+
+	deleteRec := performAuthedJSONRequest(t, handler, ownerToken, http.MethodDelete, "/v1/calendars/"+createdCalendar.ID, nil)
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d body=%s", deleteRec.Code, deleteRec.Body.String())
+	}
+
+	registerBody := `{"email":"newuser@dayflow.local","display_name":"Late Joiner","password":"secret1234","invite_code":"` + inviteBody.InviteCode + `"}`
+	registerReq := httptest.NewRequest(http.MethodPost, "/v1/auth/register", strings.NewReader(registerBody))
+	registerReq.Header.Set("Content-Type", "application/json")
+	registerRec := httptest.NewRecorder()
+	handler.ServeHTTP(registerRec, registerReq)
+
+	if registerRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", registerRec.Code, registerRec.Body.String())
+	}
+}
+
 func TestLoginSuccess(t *testing.T) {
 	body := `{"email":"owner@dayflow.local","password":"secret1234"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/auth/login", strings.NewReader(body))
@@ -747,6 +801,83 @@ func TestCalendarInviteCreationAndAcceptanceFlow(t *testing.T) {
 	})
 	if createEvent.Code != http.StatusCreated {
 		t.Fatalf("expected 201 after invite accept, got %d body=%s", createEvent.Code, createEvent.Body.String())
+	}
+}
+
+func TestInvitePreviewAllowsUnauthenticatedAccess(t *testing.T) {
+	handler := NewRouter(store.NewMemoryStore())
+	ownerToken := loginTokenForUser(t, handler, "owner@dayflow.local", "secret1234")
+
+	createRec := performAuthedJSONRequest(t, handler, ownerToken, http.MethodPost, "/v1/calendars/cal_002/invites", map[string]any{
+		"email":            "guest@dayflow.local",
+		"delivery_channel": "sms",
+		"role":             "viewer",
+	})
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d body=%s", createRec.Code, createRec.Body.String())
+	}
+
+	var createBody struct {
+		InviteCode string `json:"invite_code"`
+	}
+	decodeResponse(t, createRec, &createBody)
+	if createBody.InviteCode == "" {
+		t.Fatal("expected invite code")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/invites/"+createBody.InviteCode, nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"calendar_name":"Shared Home"`)) {
+		t.Fatalf("expected preview payload to include shared calendar name: %s", rec.Body.String())
+	}
+}
+
+func TestCalendarInviteCreationRejectsInvalidPayload(t *testing.T) {
+	handler := NewRouter(store.NewMemoryStore())
+	ownerToken := loginTokenForUser(t, handler, "owner@dayflow.local", "secret1234")
+
+	testCases := []struct {
+		name    string
+		payload map[string]any
+	}{
+		{
+			name: "missing email",
+			payload: map[string]any{
+				"email":            "",
+				"delivery_channel": "sms",
+				"role":             "viewer",
+			},
+		},
+		{
+			name: "invalid delivery channel",
+			payload: map[string]any{
+				"email":            "guest@dayflow.local",
+				"delivery_channel": "push",
+				"role":             "viewer",
+			},
+		},
+		{
+			name: "invalid role",
+			payload: map[string]any{
+				"email":            "guest@dayflow.local",
+				"delivery_channel": "email",
+				"role":             "owner",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := performAuthedJSONRequest(t, handler, ownerToken, http.MethodPost, "/v1/calendars/cal_002/invites", tc.payload)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 
