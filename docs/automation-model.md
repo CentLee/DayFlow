@@ -10,6 +10,7 @@ DayFlow-specific layer in this repository.
 Automatic:
 
 - Linear issue detection
+- issue admission validation for required metadata before repeated pickup
 - issue workspace creation
 - Codex execution
 - branch and PR creation
@@ -66,11 +67,6 @@ DayFlow runs Symphony in one lifecycle-owner lane:
 - new work enters here
 - retries also re-enter here
 
-### Ready
-
-- Symphony may execute automatically
-- must satisfy all ready criteria
-
 ### In Progress
 
 - workspace exists
@@ -91,9 +87,9 @@ DayFlow runs Symphony in one lifecycle-owner lane:
 - changes merged
 - follow-up issues created if needed
 
-## Ready Criteria
+## Admission Criteria
 
-An issue is `Ready` only if:
+An issue is auto-runnable only if:
 
 - title follows `[Agent] short task description`
 - `Primary Agent` is exactly one value
@@ -101,6 +97,8 @@ An issue is `Ready` only if:
 - `Done When` has 2 to 5 concrete checks
 - `Out of Scope` is filled in
 - the work should land in one PR
+
+If the workspace has a `Blocked` state configured, malformed `Todo` issues should be moved there instead of being retried indefinitely.
 
 ## Issue Granularity Policy
 
@@ -122,7 +120,7 @@ Vertical slice exception:
 
 - Primary Agent owns the branch and completes the scoped work
 - Primary Agent remains responsible for the issue until it is merge-ready, including review-follow-up commits on the same branch
-- The first Git action in any workspace is creating or switching to `codex/<issue-id>-<short-slug>`
+- The first Git action in any workspace is creating or switching to `feature/tasks-<issue-number>-<short-slug>`
 - `main` is the release branch and `develop` is the integration branch
 - agent implementation never happens directly on `main` or `develop`
 - issue branches start from `develop`
@@ -157,11 +155,14 @@ DayFlow now enforces these automatic state transitions:
 - open ready-for-review PR: issue moves to `In Review`
 - ready PR with fresh review findings: PR returns to draft and issue returns to `Todo`
 - merged PR: issue moves to `Done`
+- stale `In Progress` work with no diff and no branch advancement returns to `Todo`
+- stale `In Progress` work with commits but no PR is preserved in `In Progress` for manual follow-up instead of being silently retried
 - the same issue owner resumes work after review findings
 
 The reconciliation source of truth is the issue branch name:
 
-- `codex/CEN-9-...` maps to `CEN-9`
+- `feature/tasks-9-...` maps to `CEN-9`
+- legacy `codex/9-...` or `codex/CEN-9-...` remains supported for older in-flight workspaces
 
 Automation scripts:
 
@@ -187,9 +188,16 @@ DayFlow keeps Symphony on a tighter token budget than the upstream defaults:
 
 These controls are intended to stop long, low-yield runs early and keep issue retries cheap.
 
+Additional guardrails:
+
+- fresh workspaces are not treated as bootstrap stalls during the initial runtime warm-up window
+- branch-bootstrap stalls must remain clean and still match `origin/develop` before being recovered
+- requested-changes handling should rely on structured GitHub review state rather than comment text heuristics
+
 ## Branch and Workspace Naming
 
-- branch: `codex/<issue-id>-<short-slug>`
+- branch: `feature/tasks-<issue-number>-<short-slug>` preferred
+- legacy `codex/<issue-number>-<short-slug>` and `codex/<issue-id>-<short-slug>` remain supported for compatibility
 - workspace: `<workspace-root>/<issue-id>`
 
 ## Git Flow
@@ -198,7 +206,7 @@ DayFlow uses a three-level branch strategy:
 
 - `main`: release branch
 - `develop`: active integration branch
-- `codex/<issue-id>-<short-slug>`: isolated implementation branch for a single Linear issue
+- `feature/tasks-<issue-number>-<short-slug>`: isolated implementation branch for a single Linear issue
 
 Expected merge flow:
 
@@ -220,10 +228,13 @@ Move an issue to `Blocked` when:
 
 - `WORKFLOW.md`
 - `docs/automation-model.md`
+- `docs/harness-engineering.md`
 - `docs/pain-points.md`
 - `docs/failure-taxonomy.md`
 - `docs/harness-skill-model.md`
+- `docs/git-tracking-policy.md`
 - `docs/iteration-queue.md`
 - `docs/review-checklist.md`
 - `.github/pull_request_template.md`
 - `.codex/skills/dayflow-orchestrator/SKILL.md`
+- `scripts/audit_harness_drift.sh`

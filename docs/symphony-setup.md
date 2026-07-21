@@ -14,6 +14,8 @@ This repository uses a minimal local Symphony workflow modeled after the officia
 
 - `WORKFLOW.md`
 - `docs/automation-model.md`
+- `docs/harness-engineering.md`
+- `docs/git-tracking-policy.md`
 - `docs/github-local-auth.md`
 - `docs/iteration-queue.md`
 - `docs/review-checklist.md`
@@ -34,6 +36,7 @@ This repository uses a minimal local Symphony workflow modeled after the officia
 7. Symphony runs `codex app-server` in that workspace.
 8. The assigned primary agent keeps ownership through review follow-up until the PR is merge-ready.
 9. Results are returned through branch, PR, CI status, and proof-of-work summary.
+10. Use `scripts/audit_harness_drift.sh` during maintenance to check doc/workflow/script alignment.
 
 ## Token Budget Defaults
 
@@ -49,17 +52,21 @@ These values are based on the official Symphony configuration surface in the REA
 
 ## DayFlow State Machine
 
-Current Linear workspace does not have a dedicated `Ready` state yet, so DayFlow currently uses:
+Current DayFlow workflow still uses `Todo` as the runnable queue state, with admission checks in the wrapper to keep malformed issues from being retried indefinitely.
+If a `Blocked` state exists in Linear, the admission validator may move incomplete issues there.
+
+Current state usage:
 
 - `Todo`: auto-runnable queue state
 - `In Progress`: actively executing
 - `In Review`: PR open and under review
+- `Blocked`: optional manual intervention state for malformed or externally blocked work
 - `Done`: merged and complete
 - `Canceled` and `Duplicate`: terminal
 
 Planned future refinement:
 
-- add `Ready` and `Blocked` when the workflow is mature enough to separate queued work from draft work
+- add `Ready` later if the workflow needs a separate admission-passed queue state
 
 ## Required Issue Metadata
 
@@ -87,7 +94,8 @@ The title should follow `[Agent] short task description`.
 
 ## Branch and Workspace Rules
 
-- branch format: `codex/<issue-id>-<short-slug>`
+- branch format: `feature/tasks-<issue-number>-<short-slug>` preferred
+- legacy `codex/<issue-number>-<short-slug>` and `codex/<issue-id>-<short-slug>` remain supported for compatibility
 - workspace format: `<workspace-root>/<issue-id>`
 - one Linear issue per branch
 - issue branches should be created from `develop`
@@ -115,6 +123,8 @@ Automatic reconciliation rules:
 - draft PR keeps the issue in `In Progress`
 - ready-for-review PR moves the issue to `In Review`
 - fresh review findings return the PR to draft and the issue to `Todo`
+- stale in-progress work with no diff returns to `Todo`
+- stale in-progress work with commits but no PR stays owned for manual follow-up instead of being silently retried
 - merged PR moves the issue to `Done`
 - review follow-up returns to the same issue owner instead of a separate review lane
 
@@ -130,4 +140,4 @@ Future target filter after adding more Linear states:
 - the vendored Symphony runtime is pinned through the forked submodule at `/Users/kakao_ent/Documents/DayFlow/vendor/symphony`
 - new workspaces must initialize submodules so the patched Symphony runtime is available
 - the vendored Symphony Elixir runtime under `/Users/kakao_ent/Documents/DayFlow/vendor/symphony/elixir` contains a local compatibility patch for the current `codex app-server` v2 schema
-- specifically, `thread/start` sandbox values are normalized to `readOnly`, `workspaceWrite`, `dangerFullAccess`, and the default `turn/start` sandbox policy uses `mode` plus snake_case keys expected by the local app-server schema
+- specifically, `thread/start` sandbox values should be passed as `read-only`, `workspace-write`, or `danger-full-access`, while `turn/start` sandbox policies should use a `type` field with app-server variants such as `workspaceWrite`, `readOnly`, or `dangerFullAccess`

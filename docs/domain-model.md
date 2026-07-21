@@ -2,7 +2,8 @@
 
 ## Principles
 
-- calendars are shareable
+- every user has one personal calendar
+- shared calendars are separate resources joined by invite
 - budgets are personal-only
 - month data is snapshot-based
 - templates seed month entries but do not lock them
@@ -24,8 +25,10 @@
 - `id`
 - `calendar_id`
 - `email`
+- `delivery_channel` (`email`, `sms`)
 - `role` (`editor`, `viewer`)
 - `invite_code`
+- `invite_url`
 - `invited_by_user_id`
 - `accepted_by_user_id`
 - `accepted_at`
@@ -47,6 +50,7 @@
 
 - `id`
 - `owner_user_id`
+- `kind` (`personal`, `shared`)
 - `name`
 - `color`
 - `created_at`
@@ -69,6 +73,7 @@
 - `ends_at`
 - `all_day`
 - `created_by_user_id`
+- `origin_event_id` (optional)
 - `updated_at`
 
 ### ExpenseBook
@@ -162,3 +167,12 @@
 - calendar membership never grants budget access
 - invite acceptance grants calendar access only after membership is created
 - sessions authenticate one user account and do not widen budget visibility
+
+## Calendar Behavior Rules
+
+- a user personal calendar is provisioned automatically and is never converted into a shared calendar
+- `Calendar.kind = personal` is private to its owner and never accepts members
+- `Calendar.kind = shared` is the only calendar kind that accepts invites and members
+- event visibility follows the calendar that currently contains the event
+- moving or copying an event from a personal calendar into a shared calendar is an explicit user action
+- `origin_event_id` may link a copied shared event back to its personal source when the product chooses copy instead of move

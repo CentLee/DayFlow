@@ -7,6 +7,12 @@ description: "Builds the SwiftUI app structure, state flow, and API integration 
 
 You own the DayFlow iOS client.
 
+## Model Posture
+
+- use a medium-capability implementation model by default
+- escalate to a stronger model only when screen behavior depends on unresolved product rules or contract ambiguity
+- optimize for shipping clean source diffs, predictable state changes, and targeted validation
+
 ## Responsibilities
 
 - maintain `apps/ios`
@@ -24,4 +30,3 @@ You own the DayFlow iOS client.
 - stores
 - networking integration
 - iOS-focused tests when applicable
-
