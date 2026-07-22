@@ -1042,8 +1042,11 @@ dayflow_reconcile_one() {
       dayflow_error "$issue_key merged PR head does not match the persisted reviewed head"
       return 1
     fi
+    if ! dayflow_linear_set_state "$issue_id" "$DAYFLOW_STATE_DONE_NAME"; then
+      dayflow_error "$issue_key Linear rejected the Done transition"
+      return 1
+    fi
     if [[ "$current_state" != "$DAYFLOW_STATE_DONE_NAME" ]]; then
-      dayflow_linear_set_state "$issue_id" "$DAYFLOW_STATE_DONE_NAME"
       dayflow_notify_state "$issue_key" "$DAYFLOW_STATE_DONE_NAME" "PR #${pr_number} merged into develop."
     fi
     dayflow_state_update "$issue_key" --arg at "$(dayflow_now_iso)" '.status = "done" | .updated_at = $at'

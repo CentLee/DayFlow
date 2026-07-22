@@ -222,6 +222,28 @@ run_merged_reviewed_head_integrity_test() {
   rm -rf "$test_root"
 }
 
+run_merged_linear_done_rejection_test() {
+  local test_root seed state_file state_before
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  export FAKE_CODEX_MODE=success FAKE_REVIEW_MODE=clean
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
+  state_file="$DAYFLOW_STATE_ROOT/CEN-29.json"
+  state_before="$(<"$state_file")"
+  : >"$FAKE_CURL_LOG"
+  export FAKE_GH_PR_STATE=MERGED FAKE_LINEAR_FAIL_STATE=state-done
+
+  if "$SOURCE_ROOT/scripts/dayflow_runner.sh" reconcile CEN-29 >/dev/null 2>&1; then
+    test_fail 'Linear Done rejection must fail merged reconciliation'
+  fi
+  assert_file_contains "$FAKE_CURL_LOG" 'state-done' 'Linear Done transition was attempted'
+  assert_eq "$state_before" "$(<"$state_file")" 'Linear Done rejection preserves pre-Done local state'
+  assert_failure 'Linear Done rejection must not send Done webhook' rg -q -- 'discord.test/webhook' "$FAKE_CURL_LOG"
+  rm -rf "$test_root"
+}
+
 run_cross_issue_merge_ready_store_lock_test() {
   local test_root seed first_rc=0 second_rc=0 merge_ready_count
   test_root="$(mktemp -d)"
@@ -281,5 +303,6 @@ run_ci_timeout_test
 run_webhook_retry_and_lock_test
 run_merged_base_integrity_test
 run_merged_reviewed_head_integrity_test
+run_merged_linear_done_rejection_test
 run_cross_issue_merge_ready_store_lock_test
 finish_tests 'dayflow_runner_integration_test'
