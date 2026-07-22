@@ -15,6 +15,7 @@ LINEAR_API_KEY=... scripts/dayflow_runner.sh reconcile
 - `run` starts a `Todo` issue or resumes an owned `In Progress`/`In Review` issue.
 - `status` combines local state with available Linear and GitHub state without changing either.
 - `reconcile` maps PR state back to Linear, handles requested changes, and sends merge-ready or completion notifications.
+- merged task PRs are normally closed by `.github/workflows/merge-lifecycle.yml`; local `reconcile` remains a recovery path.
 - `--dry-run` validates issue admission, role routing, branch naming, and resume eligibility without creating runtime state or changing external systems.
 
 ## Admission and Ownership
@@ -61,9 +62,17 @@ Secrets belong only in local environment variables or ignored files:
 
 The Discord file contains `DAYFLOW_DISCORD_WEBHOOK_URL=...`. GitHub CLI authentication defaults to `.dayflow/gh`; set `GH_CONFIG_DIR` only when an explicit alternate local store is required.
 
+## Merge Closure and Cleanup
+
+For a repository-owned `feature/tasks-N-*` PR merged into `develop`, GitHub Actions moves `CEN-N` to `Done` and sends the deduplicated Discord completion notification. Rerun a failed merge-lifecycle job from GitHub Actions after a Linear, GitHub, or Discord outage; no local polling loop is needed.
+
+Enable GitHub's **Automatically delete head branches** repository setting for remote cleanup. The event reconciler does not fetch or delete the head ref, so automatic deletion is safe even when it happens before the job runs.
+
+The hosted job never deletes local `.dayflow` state or worktrees. Before a later local cleanup, fetch `origin/develop` with pruning, use `scripts/dayflow_runner.sh status CEN-N` to verify `Done` and the merged PR, and require an empty `git status --porcelain` in the exact `.dayflow/worktrees/CEN-N` workspace. Use non-forced `git worktree remove` only after those guards. Do not automatically remove dirty workspaces or the legacy CEN-28 workspace.
+
 ## Recovery
 
 - Admission failure: fix the Linear metadata, return the issue to `Todo`, and rerun.
 - Model, token, timeout, or delivery failure: inspect `status` and `.dayflow/logs`, retain the worktree, resolve the cause, then deliberately return the issue to a runnable state.
 - Requested changes: run `reconcile`, then `run CEN-N`; the same Primary Agent session resumes.
-- Merged PR: run `reconcile CEN-N` to close Linear and send completion notification.
+- Failed merged-PR workflow: rerun the failed GitHub Actions job; use local `reconcile CEN-N` only as a deliberate fallback.

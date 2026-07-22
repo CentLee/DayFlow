@@ -12,6 +12,7 @@ Automatic behavior:
 - delivery proof validation
 - structured review and one remediation pass
 - PR-to-Linear reconciliation
+- merged-PR lifecycle closure in GitHub Actions
 - deduplicated Discord notifications
 
 Manual behavior:
@@ -68,6 +69,16 @@ The default execution sandbox is `workspace-write`, approval policy is `never`, 
 - merged PR: `Done` plus completion notification
 
 `status` is read-only. `reconcile [CEN-N]` handles one issue; `reconcile` handles all locally owned issues. No background poller is required.
+
+### Merged PR event closure
+
+`.github/workflows/merge-lifecycle.yml` runs when a pull request closes. The deterministic reconciler accepts only a merged, `develop`-targeted PR whose repository-owned head matches `feature/tasks-N-<slug>`. It derives `CEN-N` from that branch, reads the issue from Linear, and moves it to `Done` only when it is not already there.
+
+After Linear is confirmed `Done`, the workflow delivers the Discord completion message. A successful delivery is recorded as a hidden marker in a PR comment. Replayed events and workflow reruns read that marker and make no further mutation or delivery. A failed Discord request records no marker and fails the job, so GitHub's **Re-run failed jobs** action retries delivery while the idempotent Linear read prevents a second state transition. The per-PR workflow concurrency group prevents overlapping event attempts.
+
+The repository setting **Settings > General > Pull Requests > Automatically delete head branches** owns remote feature-branch deletion. The workflow relies only on the immutable event payload and the merged base branch, so deletion may happen before reconciliation without losing the `CEN-N` mapping. The workflow never calls the Git ref deletion API.
+
+GitHub-hosted reconciliation does not access `.dayflow/` and never removes a local worktree. On the next local runner use, the merged workspace remains inspectable and cannot be resumed from Linear `Done`. Cleanup is deliberately separate: first fetch/prune, confirm `scripts/dayflow_runner.sh status CEN-N` reports the merged PR and `Done`, and confirm the worktree is clean; then remove that exact worktree with non-forced `git worktree remove`. Dirty or legacy workspaces, including CEN-28, are left untouched.
 
 ## Repository Truth
 

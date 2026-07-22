@@ -30,7 +30,7 @@ P0-P2 findings trigger one same-session remediation. Remaining blockers after re
 
 ### F7. Reconciliation Failure
 
-Linear, GitHub, or Discord is temporarily unavailable. Local state remains authoritative for ownership, external mutation is not guessed, and `reconcile` can be rerun after service recovery.
+Linear, GitHub, or Discord is temporarily unavailable. Local state remains authoritative for ownership, external mutation is not guessed, and local `reconcile` can be rerun after service recovery. For the merged-PR GitHub workflow, a failed Discord delivery leaves no success marker and the failed job is retryable; a prior `Done` transition is detected instead of repeated.
 
 ### F8. Lock Conflict
 
