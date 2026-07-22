@@ -1,0 +1,21 @@
+{
+  "action": "closed",
+  "pull_request": {
+    "number": 42,
+    "merged": true,
+    "html_url": "https://github.com/CentLee/DayFlow/pull/42",
+    "merge_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "base": {
+      "ref": "develop"
+    },
+    "head": {
+      "ref": "feature/tasks-30-automate-merged-pr-lifecycle-closure",
+      "repo": {
+        "full_name": "CentLee/DayFlow"
+      }
+    }
+  },
+  "repository": {
+    "full_name": "CentLee/DayFlow"
+  }
+}

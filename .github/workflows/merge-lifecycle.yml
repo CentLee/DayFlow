@@ -1,0 +1,30 @@
+name: Merge Lifecycle Reconcile
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [develop]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: dayflow-merge-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+      - name: Reconcile merged task PR
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          DAYFLOW_DISCORD_WEBHOOK_URL: ${{ secrets.DAYFLOW_DISCORD_WEBHOOK_URL }}
+        run: scripts/github_merge_reconcile.sh
