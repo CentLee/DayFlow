@@ -34,6 +34,18 @@ if [[ -z "$worktree" ]]; then
   worktree="$PWD"
 fi
 
+if [[ "$is_review" == "true" && "${FAKE_REQUIRE_DRAFT_REVIEW:-false}" == "true" ]]; then
+  [[ ! -f "${FAKE_GH_READY_FILE:?}" ]] || {
+    printf '%s\n' '{"type":"error","message":"review started while PR was ready"}'
+    exit 90
+  }
+  : >"${FAKE_REVIEW_DRAFT_MARKER:?}"
+fi
+if [[ "$is_review" == "true" && "${FAKE_REVIEW_MODE:-clean}" == "execution-fail" ]]; then
+  printf '%s\n' '{"type":"error","message":"fake review execution failure"}'
+  exit 1
+fi
+
 case "${FAKE_CODEX_MODE:-success}" in
   model-rejected)
     printf '%s\n' '{"type":"error","message":"model unavailable: access denied"}'

@@ -28,10 +28,12 @@ DAYFLOW_TOKEN_LIMIT="${DAYFLOW_TOKEN_LIMIT:-120000}"
 DAYFLOW_MONITOR_INTERVAL_SECONDS="${DAYFLOW_MONITOR_INTERVAL_SECONDS:-2}"
 DAYFLOW_CI_POLL_INTERVAL_SECONDS="${DAYFLOW_CI_POLL_INTERVAL_SECONDS:-5}"
 DAYFLOW_CI_WAIT_TIMEOUT_SECONDS="${DAYFLOW_CI_WAIT_TIMEOUT_SECONDS:-600}"
+DAYFLOW_SHARED_LOCK_ATTEMPTS="${DAYFLOW_SHARED_LOCK_ATTEMPTS:-300}"
 DAYFLOW_DEFAULT_SANDBOX="${DAYFLOW_DEFAULT_SANDBOX:-workspace-write}"
 DAYFLOW_DRY_RUN="${DAYFLOW_DRY_RUN:-false}"
 DAYFLOW_ACTIVE_CODEX_PID=""
 DAYFLOW_ACTIVE_CODEX_PGID=""
+DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR=""
 
 dayflow_error() {
   printf 'dayflow-runner: %s\n' "$*" >&2
@@ -129,6 +131,7 @@ dayflow_migrate_legacy_runtime() {
   local legacy_gh="$DAYFLOW_LEGACY_RUNTIME_DIR/gh"
   local legacy_notifications="$DAYFLOW_LEGACY_RUNTIME_DIR/notifications.env"
   local legacy_merge_ready="$DAYFLOW_LEGACY_RUNTIME_DIR/artifacts/merge_ready_notifications.json"
+  local migration_rc=0
 
   if [[ ! -e "$DAYFLOW_GH_CONFIG_DIR" && -d "$legacy_gh" ]]; then
     cp -R "$legacy_gh" "$DAYFLOW_GH_CONFIG_DIR"
@@ -137,16 +140,23 @@ dayflow_migrate_legacy_runtime() {
     cp "$legacy_notifications" "$DAYFLOW_NOTIFICATIONS_ENV_FILE"
     chmod 600 "$DAYFLOW_NOTIFICATIONS_ENV_FILE" 2>/dev/null || true
   fi
+  dayflow_acquire_merge_ready_lock || return 1
   if [[ ! -e "$DAYFLOW_MERGE_READY_STORE" && -f "$legacy_merge_ready" ]]; then
-    cp "$legacy_merge_ready" "$DAYFLOW_MERGE_READY_STORE"
+    cp "$legacy_merge_ready" "$DAYFLOW_MERGE_READY_STORE" || migration_rc=1
   fi
-  [[ -f "$DAYFLOW_MERGE_READY_STORE" ]] || printf '{}\n' >"$DAYFLOW_MERGE_READY_STORE"
-  dayflow_normalize_merge_ready_store
+  if (( migration_rc == 0 )) && [[ ! -f "$DAYFLOW_MERGE_READY_STORE" ]]; then
+    printf '{}\n' >"$DAYFLOW_MERGE_READY_STORE" || migration_rc=1
+  fi
+  if (( migration_rc == 0 )); then
+    dayflow_normalize_merge_ready_store || migration_rc=1
+  fi
+  dayflow_release_merge_ready_lock
+  return "$migration_rc"
 }
 
 dayflow_normalize_merge_ready_store() {
   local tmp_file="${DAYFLOW_MERGE_READY_STORE}.tmp.$$"
-  jq '
+  if ! jq '
     reduce to_entries[] as $entry ({};
       if ($entry.key | test("^CEN-[0-9]+$")) then
         .[$entry.key] = $entry.value
@@ -160,8 +170,14 @@ dayflow_normalize_merge_ready_store() {
         .[$entry.key] = $entry.value
       end
     )
-  ' "$DAYFLOW_MERGE_READY_STORE" >"$tmp_file"
-  mv "$tmp_file" "$DAYFLOW_MERGE_READY_STORE"
+  ' "$DAYFLOW_MERGE_READY_STORE" >"$tmp_file"; then
+    rm -f "$tmp_file"
+    return 1
+  fi
+  if ! mv "$tmp_file" "$DAYFLOW_MERGE_READY_STORE"; then
+    rm -f "$tmp_file"
+    return 1
+  fi
 }
 
 dayflow_acquire_lock() {
@@ -199,10 +215,45 @@ dayflow_release_lock() {
   DAYFLOW_ACTIVE_LOCK_DIR=""
 }
 
+dayflow_acquire_merge_ready_lock() {
+  local lock_dir="$DAYFLOW_STATE_ROOT/merge-ready.lock"
+  local existing_pid="" attempt
+
+  for ((attempt = 0; attempt < DAYFLOW_SHARED_LOCK_ATTEMPTS; attempt++)); do
+    existing_pid=""
+    if mkdir "$lock_dir" 2>/dev/null; then
+      printf '%s\n' "$$" >"$lock_dir/pid"
+      DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR="$lock_dir"
+      return 0
+    fi
+
+    [[ -f "$lock_dir/pid" ]] && existing_pid="$(<"$lock_dir/pid")"
+    if [[ ! "$existing_pid" =~ ^[0-9]+$ ]] || ! kill -0 "$existing_pid" 2>/dev/null; then
+      rm -f "$lock_dir/pid"
+      rmdir "$lock_dir" 2>/dev/null || true
+      existing_pid=""
+      continue
+    fi
+    sleep 0.1
+  done
+
+  dayflow_error 'timed out waiting for the merge-ready store lock'
+  return 1
+}
+
+dayflow_release_merge_ready_lock() {
+  if [[ -n "${DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR:-}" && -d "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR" ]]; then
+    rm -f "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR/pid"
+    rmdir "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR" 2>/dev/null || true
+  fi
+  DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR=""
+}
+
 dayflow_exit_cleanup() {
   local status=$?
   trap - EXIT INT TERM
   dayflow_stop_active_codex
+  dayflow_release_merge_ready_lock
   dayflow_release_lock
   exit "$status"
 }
@@ -397,7 +448,7 @@ dayflow_issue_prompt() {
   cat <<EOF
 You are the primary ${agent} for ${issue_key} in DayFlow.
 
-Own this issue through implementation, tests, commit, push, a ready PR targeting develop, proof-of-work completion, and review follow-up. Work only in the current issue branch. Do not merge the PR. Keep secrets and runtime artifacts out of git.
+Own this issue through implementation, tests, commit, push, a draft PR targeting develop, proof-of-work completion, and review follow-up. Do not mark the PR ready; the runner does that only after a clean automated review of the exact delivered head. Work only in the current issue branch. Do not merge the PR. Keep secrets and runtime artifacts out of git.
 
 Issue title: ${title}
 
@@ -476,6 +527,58 @@ dayflow_validate_resume_state() {
   }
   [[ "$persisted_agent" == "$expected_agent" && "$persisted_model" == "$expected_model" && "$persisted_reasoning" == "$expected_reasoning" ]] || {
     dayflow_error "$issue_key resume ownership metadata no longer matches Linear routing"
+    return 1
+  }
+  printf '%s\n' "$worktree"
+}
+
+dayflow_is_pre_session_recovery() {
+  local issue_key="$1"
+  local state_file
+  state_file="$(dayflow_state_file "$issue_key")"
+  [[ -f "$state_file" ]] || return 1
+  [[ "$(jq -r '.status // ""' "$state_file")" == "pre-session-blocked" ]] || return 1
+  [[ -z "$(jq -r '.session_id // ""' "$state_file")" ]]
+}
+
+dayflow_validate_pre_session_recovery() {
+  local issue_key="$1"
+  local expected_branch="$2"
+  local expected_agent="$3"
+  local expected_model="$4"
+  local expected_reasoning="$5"
+  local state_file worktree branch persisted_agent persisted_model persisted_reasoning commit_count
+  state_file="$(dayflow_state_file "$issue_key")"
+  dayflow_is_pre_session_recovery "$issue_key" || {
+    dayflow_error "$issue_key is not in the recoverable pre-session state"
+    return 1
+  }
+
+  worktree="$(jq -r '.worktree // ""' "$state_file")"
+  persisted_agent="$(jq -r '.primary_agent // ""' "$state_file")"
+  persisted_model="$(jq -r '.model // ""' "$state_file")"
+  persisted_reasoning="$(jq -r '.reasoning // ""' "$state_file")"
+  [[ "$worktree" == "$DAYFLOW_WORKTREE_ROOT/$issue_key" && -e "$worktree/.git" ]] || {
+    dayflow_error "$issue_key pre-session recovery worktree is not owned by this issue"
+    return 1
+  }
+  branch="$(git -C "$worktree" branch --show-current)"
+  [[ "$branch" == "$expected_branch" ]] || {
+    dayflow_error "$issue_key pre-session recovery branch mismatch: $branch"
+    return 1
+  }
+  [[ "$persisted_agent" == "$expected_agent" && "$persisted_model" == "$expected_model" && "$persisted_reasoning" == "$expected_reasoning" ]] || {
+    dayflow_error "$issue_key pre-session recovery ownership metadata no longer matches Linear routing"
+    return 1
+  }
+  [[ -z "$(git -C "$worktree" status --porcelain --untracked-files=normal)" ]] || {
+    dayflow_error "$issue_key pre-session recovery worktree is not clean"
+    return 1
+  }
+  git -C "$ROOT_DIR" fetch origin develop >/dev/null
+  commit_count="$(git -C "$worktree" rev-list --count origin/develop..HEAD)"
+  [[ "$commit_count" == "0" ]] && git -C "$worktree" merge-base --is-ancestor HEAD origin/develop || {
+    dayflow_error "$issue_key pre-session recovery branch contains unowned commits"
     return 1
   }
   printf '%s\n' "$worktree"
@@ -762,6 +865,14 @@ dayflow_validate_delivery() {
   printf '%s\n' "$pr_json"
 }
 
+dayflow_ensure_pr_draft() {
+  local pr_json="$1"
+  local pr_number
+  [[ "$(jq -r '.isDraft' <<<"$pr_json")" == "true" ]] && return 0
+  pr_number="$(jq -r '.number' <<<"$pr_json")"
+  dayflow_gh pr ready -R "$(dayflow_github_repo)" --undo "$pr_number" >/dev/null
+}
+
 dayflow_review_has_blockers() {
   local review_file="$1"
   jq -e '[.findings[]? | select(.severity == "P0" or .severity == "P1" or .severity == "P2")] | length > 0' "$review_file" >/dev/null
@@ -864,13 +975,32 @@ dayflow_record_merge_ready() {
   local pr_url="$3"
   local head_sha="$4"
   local existing tmp
-  existing="$(jq -r --arg key "$issue_key" --arg pr "$pr_number" '.[$key].head_sha? // .[$pr].head_sha? // ""' "$DAYFLOW_MERGE_READY_STORE")"
-  [[ "$existing" != "$head_sha" ]] || return 0
-  dayflow_notify "DayFlow ${issue_key} merge-ready" "PR #${pr_number} is ready to merge.\n${pr_url}" 5763719 || return 1
+  dayflow_acquire_merge_ready_lock || return 1
+  if ! existing="$(jq -r --arg key "$issue_key" --arg pr "$pr_number" '.[$key].head_sha? // .[$pr].head_sha? // ""' "$DAYFLOW_MERGE_READY_STORE")"; then
+    dayflow_release_merge_ready_lock
+    return 1
+  fi
+  if [[ "$existing" == "$head_sha" ]]; then
+    dayflow_release_merge_ready_lock
+    return 0
+  fi
+  if ! dayflow_notify "DayFlow ${issue_key} merge-ready" "PR #${pr_number} is ready to merge.\n${pr_url}" 5763719; then
+    dayflow_release_merge_ready_lock
+    return 1
+  fi
   tmp="${DAYFLOW_MERGE_READY_STORE}.tmp.$$"
-  jq --arg key "$issue_key" --arg sha "$head_sha" --argjson pr "$pr_number" --arg at "$(dayflow_now_iso)" \
-    '.[$key] = {head_sha: $sha, pr_number: $pr, notified_at: $at}' "$DAYFLOW_MERGE_READY_STORE" >"$tmp"
-  mv "$tmp" "$DAYFLOW_MERGE_READY_STORE"
+  if ! jq --arg key "$issue_key" --arg sha "$head_sha" --argjson pr "$pr_number" --arg at "$(dayflow_now_iso)" \
+    '.[$key] = {head_sha: $sha, pr_number: $pr, notified_at: $at}' "$DAYFLOW_MERGE_READY_STORE" >"$tmp"; then
+    rm -f "$tmp"
+    dayflow_release_merge_ready_lock
+    return 1
+  fi
+  if ! mv "$tmp" "$DAYFLOW_MERGE_READY_STORE"; then
+    rm -f "$tmp"
+    dayflow_release_merge_ready_lock
+    return 1
+  fi
+  dayflow_release_merge_ready_lock
 }
 
 dayflow_reconcile_one() {
@@ -906,6 +1036,12 @@ dayflow_reconcile_one() {
   }
 
   if [[ "$pr_state" == "MERGED" ]]; then
+    if [[ -z "$reviewed_head_sha" || "$head_sha" != "$reviewed_head_sha" ]]; then
+      dayflow_state_update "$issue_key" --arg head "$head_sha" --arg reviewed "$reviewed_head_sha" --arg at "$(dayflow_now_iso)" \
+        '.status = "merged-review-mismatch" | .last_error = "merged PR head does not match the persisted reviewed head" | .merged_head_sha = $head | .reviewed_head_sha = $reviewed | .updated_at = $at'
+      dayflow_error "$issue_key merged PR head does not match the persisted reviewed head"
+      return 1
+    fi
     if [[ "$current_state" != "$DAYFLOW_STATE_DONE_NAME" ]]; then
       dayflow_linear_set_state "$issue_id" "$DAYFLOW_STATE_DONE_NAME"
       dayflow_notify_state "$issue_key" "$DAYFLOW_STATE_DONE_NAME" "PR #${pr_number} merged into develop."
@@ -957,6 +1093,7 @@ dayflow_run_issue() {
   local issue_json issue_id title description linear_state primary model_route model reasoning branch worktree session_id mode
   local timestamp prompt_file log_file output_file pr_json pr_number review_prompt review_log review_output
   local review_round=1 findings_comment remediation_prompt remediation_log remediation_output repo
+  local pre_session_recovery=false
 
   dayflow_validate_issue_key "$issue_key" || {
     dayflow_error "invalid issue key: $issue_key"
@@ -975,39 +1112,62 @@ dayflow_run_issue() {
   model_route="$(dayflow_model_for_agent "$primary")"
   read -r model reasoning <<<"$model_route"
   branch="$(dayflow_branch_name "$issue_key" "$title")"
+  if dayflow_is_pre_session_recovery "$issue_key"; then
+    pre_session_recovery=true
+  fi
 
   if [[ "$DAYFLOW_DRY_RUN" == "true" ]]; then
-    case "$linear_state" in
-      "$DAYFLOW_STATE_TODO_NAME") ;;
-      "$DAYFLOW_STATE_IN_PROGRESS_NAME"|"$DAYFLOW_STATE_IN_REVIEW_NAME")
-        dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" >/dev/null || return 1
-        ;;
-      *) dayflow_error "issue state is not runnable: $linear_state"; return 1 ;;
-    esac
+    if [[ "$pre_session_recovery" == "true" ]]; then
+      case "$linear_state" in
+        "$DAYFLOW_STATE_TODO_NAME"|"$DAYFLOW_STATE_BLOCKED_NAME"|"$DAYFLOW_STATE_IN_PROGRESS_NAME")
+          dayflow_validate_pre_session_recovery "$issue_key" "$branch" "$primary" "$model" "$reasoning" >/dev/null || return 1
+          ;;
+        *) dayflow_error "pre-session recovery is not runnable from issue state: $linear_state"; return 1 ;;
+      esac
+    else
+      case "$linear_state" in
+        "$DAYFLOW_STATE_TODO_NAME") ;;
+        "$DAYFLOW_STATE_IN_PROGRESS_NAME"|"$DAYFLOW_STATE_IN_REVIEW_NAME")
+          dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" >/dev/null || return 1
+          ;;
+        *) dayflow_error "issue state is not runnable: $linear_state"; return 1 ;;
+      esac
+    fi
     jq -n --arg issue "$issue_key" --arg state "$linear_state" --arg agent "$primary" \
       --arg model "$model" --arg reasoning "$reasoning" --arg branch "$branch" \
-      '{dry_run: true, issue: $issue, state: $state, primary_agent: $agent, model: $model, reasoning: $reasoning, branch: $branch}'
+      --argjson recovery "$pre_session_recovery" \
+      '{dry_run: true, issue: $issue, state: $state, primary_agent: $agent, model: $model, reasoning: $reasoning, branch: $branch, pre_session_recovery: $recovery}'
     return 0
   fi
 
   dayflow_acquire_lock "$issue_key" || return 1
   dayflow_install_cleanup_traps
-  case "$linear_state" in
-    "$DAYFLOW_STATE_TODO_NAME")
-      worktree="$(dayflow_prepare_new_worktree "$issue_key" "$branch")" || return 1
-      session_id=""
-      mode="primary-new"
-      ;;
-    "$DAYFLOW_STATE_IN_PROGRESS_NAME"|"$DAYFLOW_STATE_IN_REVIEW_NAME")
-      worktree="$(dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning")" || return 1
-      session_id="$(dayflow_state_value "$issue_key" '.session_id')"
-      mode="primary-resume"
-      ;;
-    *)
-      dayflow_error "issue state is not runnable: $linear_state"
-      return 1
-      ;;
-  esac
+  if dayflow_is_pre_session_recovery "$issue_key"; then
+    case "$linear_state" in
+      "$DAYFLOW_STATE_TODO_NAME"|"$DAYFLOW_STATE_BLOCKED_NAME"|"$DAYFLOW_STATE_IN_PROGRESS_NAME") ;;
+      *) dayflow_error "pre-session recovery is not runnable from issue state: $linear_state"; return 1 ;;
+    esac
+    worktree="$(dayflow_validate_pre_session_recovery "$issue_key" "$branch" "$primary" "$model" "$reasoning")" || return 1
+    session_id=""
+    mode="primary-new"
+  else
+    case "$linear_state" in
+      "$DAYFLOW_STATE_TODO_NAME")
+        worktree="$(dayflow_prepare_new_worktree "$issue_key" "$branch")" || return 1
+        session_id=""
+        mode="primary-new"
+        ;;
+      "$DAYFLOW_STATE_IN_PROGRESS_NAME"|"$DAYFLOW_STATE_IN_REVIEW_NAME")
+        worktree="$(dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning")" || return 1
+        session_id="$(dayflow_state_value "$issue_key" '.session_id')"
+        mode="primary-resume"
+        ;;
+      *)
+        dayflow_error "issue state is not runnable: $linear_state"
+        return 1
+        ;;
+    esac
+  fi
 
   dayflow_state_update "$issue_key" \
     --arg issue "$issue_key" --arg id "$issue_id" --arg title "$title" --arg agent "$primary" \
@@ -1046,6 +1206,13 @@ dayflow_run_issue() {
     return 1
   fi
   pr_number="$(jq -r '.number' <<<"$pr_json")"
+  if ! dayflow_ensure_pr_draft "$pr_json"; then
+    dayflow_block_issue "$issue_json" 'Unable to return the delivery PR to draft before automated review.'
+    return 1
+  fi
+  pr_json="$(jq '.isDraft = true' <<<"$pr_json")"
+  dayflow_state_update "$issue_key" --arg at "$(dayflow_now_iso)" \
+    '.status = "reviewing" | del(.reviewed_head_sha, .unreviewed_head_sha) | .updated_at = $at'
 
   while (( review_round <= 2 )); do
     review_prompt="$DAYFLOW_LOG_ROOT/${issue_key}-${timestamp}-review-${review_round}.prompt"
@@ -1144,6 +1311,7 @@ dayflow_status_issue() {
 dayflow_reconcile() {
   local issue_key="${1:-}"
   local state_file target rc=0
+  dayflow_install_cleanup_traps
   if [[ -n "$issue_key" ]]; then
     dayflow_validate_issue_key "$issue_key" || return 2
     dayflow_acquire_lock "$issue_key" || return 1

@@ -37,6 +37,9 @@ admissible="$(<"$TEST_DIR/fixtures/admissible-issue.json")"
 invalid="$(<"$TEST_DIR/fixtures/invalid-issue.json")"
 assert_success 'admissible fixture should pass' dayflow_validate_admission "$admissible"
 assert_failure 'invalid fixture should fail admission' dayflow_validate_admission "$invalid"
+primary_prompt="$(dayflow_issue_prompt "$admissible" integration-agent)"
+assert_success 'primary prompt requires a draft PR' grep -Fq 'a draft PR targeting develop' <<<"$primary_prompt"
+assert_success 'primary prompt reserves ready transition for runner' grep -Fq 'Do not mark the PR ready' <<<"$primary_prompt"
 
 assert_eq 'gpt-5.6-sol high' "$(dayflow_model_for_agent integration-agent)" 'integration routing'
 assert_eq 'gpt-5.6-sol high' "$(dayflow_model_for_agent product-agent)" 'product routing'

@@ -45,8 +45,29 @@ run_delivery_integrity_test() {
   rm -rf "$test_root"
 }
 
-run_start_transition_failure_test() {
+run_review_execution_failure_draft_test() {
   local test_root seed
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  export FAKE_CODEX_MODE=success FAKE_REVIEW_MODE=execution-fail FAKE_REQUIRE_DRAFT_REVIEW=true
+  export FAKE_REVIEW_DRAFT_MARKER="$test_root/review-started-draft"
+  : >"$FAKE_GH_READY_FILE"
+
+  if "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null 2>&1; then
+    test_fail 'review execution failure should block the run'
+  fi
+  assert_success 'first review started only after PR became draft' test -f "$FAKE_REVIEW_DRAFT_MARKER"
+  assert_failure 'review execution failure leaves PR draft' test -f "$FAKE_GH_READY_FILE"
+  assert_file_contains "$FAKE_GH_LOG" 'ready.*--undo' 'delivery was forced to draft before review'
+  assert_eq 'blocked' "$(jq -r '.status' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'review execution failure state'
+  assert_eq '' "$(jq -r '.reviewed_head_sha // ""' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'failed review does not persist reviewed head'
+  rm -rf "$test_root"
+}
+
+run_start_transition_failure_test() {
+  local test_root seed worktree
   test_root="$(mktemp -d)"
   seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
   dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
@@ -59,6 +80,14 @@ run_start_transition_failure_test() {
   assert_eq 'pre-session-blocked' "$(jq -r '.status' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'pre-session recovery state'
   assert_success 'worktree preserved after transition failure' test -e "$DAYFLOW_WORKTREE_ROOT/CEN-29/.git"
   assert_failure 'Codex not launched after transition failure' test -e "$FAKE_CODEX_LOG"
+  worktree="$(jq -r '.worktree' "$DAYFLOW_STATE_ROOT/CEN-29.json")"
+
+  unset FAKE_LINEAR_FAIL_STATE
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
+  assert_eq "$worktree" "$(jq -r '.worktree' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'pre-session retry reuses owned worktree'
+  assert_eq 'fake-primary-session' "$(jq -r '.session_id' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'pre-session retry starts a new primary session'
+  assert_eq 'merge-ready' "$(jq -r '.status' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'pre-session retry completes lifecycle'
+  assert_failure 'pre-session retry must not use resume mode' rg -q -- 'resume' "$FAKE_CODEX_LOG"
   rm -rf "$test_root"
 }
 
@@ -162,6 +191,66 @@ run_merged_base_integrity_test() {
   rm -rf "$test_root"
 }
 
+run_merged_reviewed_head_integrity_test() {
+  local test_root seed state_file reviewed_head tmp_file
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  export FAKE_CODEX_MODE=success FAKE_REVIEW_MODE=clean
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
+  state_file="$DAYFLOW_STATE_ROOT/CEN-29.json"
+  reviewed_head="$(jq -r '.reviewed_head_sha' "$state_file")"
+  tmp_file="$state_file.tmp"
+
+  jq 'del(.reviewed_head_sha)' "$state_file" >"$tmp_file"
+  mv "$tmp_file" "$state_file"
+  export FAKE_GH_PR_STATE=MERGED
+  if "$SOURCE_ROOT/scripts/dayflow_runner.sh" reconcile CEN-29 >/dev/null 2>&1; then
+    test_fail 'merged PR without a reviewed head must fail closed'
+  fi
+  assert_eq 'merged-review-mismatch' "$(jq -r '.status' "$state_file")" 'missing merged reviewed head state'
+
+  jq --arg reviewed "$reviewed_head" '.reviewed_head_sha = $reviewed' "$state_file" >"$tmp_file"
+  mv "$tmp_file" "$state_file"
+  export FAKE_GH_HEAD_SHA_OVERRIDE=unreviewed-merged-head
+  if "$SOURCE_ROOT/scripts/dayflow_runner.sh" reconcile CEN-29 >/dev/null 2>&1; then
+    test_fail 'merged PR with an unreviewed head must fail closed'
+  fi
+  assert_eq 'merged-review-mismatch' "$(jq -r '.status' "$state_file")" 'merged head mismatch state'
+  assert_failure 'merged head mismatch must not mark Done' rg -q -- 'state-done' "$FAKE_CURL_LOG"
+  rm -rf "$test_root"
+}
+
+run_cross_issue_merge_ready_store_lock_test() {
+  local test_root seed first_rc=0 second_rc=0 merge_ready_count
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  mkdir -p "$DAYFLOW_STATE_ROOT"
+  printf '%s\n' '{}' >"$DAYFLOW_MERGE_READY_STORE"
+  printf '%s\n' '{"issue":"CEN-29","issue_id":"issue-29","branch":"feature/tasks-29-first","reviewed_head_sha":"shared-reviewed-head"}' >"$DAYFLOW_STATE_ROOT/CEN-29.json"
+  printf '%s\n' '{"issue":"CEN-30","issue_id":"issue-30","branch":"feature/tasks-30-second","reviewed_head_sha":"shared-reviewed-head"}' >"$DAYFLOW_STATE_ROOT/CEN-30.json"
+  export FAKE_GH_HEAD_SHA_OVERRIDE=shared-reviewed-head FAKE_WEBHOOK_DELAY_SECONDS=0.5
+  : >"$FAKE_GH_READY_FILE"
+  : >"$FAKE_CURL_LOG"
+
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" reconcile CEN-29 >/dev/null &
+  first_pid=$!
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" reconcile CEN-30 >/dev/null &
+  second_pid=$!
+  wait "$first_pid" || first_rc=$?
+  wait "$second_pid" || second_rc=$?
+  assert_eq '0' "$first_rc" 'first issue reconcile succeeds'
+  assert_eq '0' "$second_rc" 'second issue reconcile succeeds'
+  assert_eq 'shared-reviewed-head' "$(jq -r '.["CEN-29"].head_sha' "$DAYFLOW_MERGE_READY_STORE")" 'first issue dedupe record preserved'
+  assert_eq 'shared-reviewed-head' "$(jq -r '.["CEN-30"].head_sha' "$DAYFLOW_MERGE_READY_STORE")" 'second issue dedupe record preserved'
+  merge_ready_count="$(rg -c 'merge-ready' "$FAKE_CURL_LOG")"
+  assert_eq '2' "$merge_ready_count" 'both issue webhooks delivered exactly once'
+  rm -rf "$test_root"
+}
+
 run_model_rejection_test() {
   local test_root seed
   test_root="$(mktemp -d)"
@@ -184,10 +273,13 @@ run_model_rejection_test() {
 run_review_remediation_test
 run_model_rejection_test
 run_delivery_integrity_test
+run_review_execution_failure_draft_test
 run_start_transition_failure_test
 run_review_visibility_test
 run_final_blocker_visibility_test
 run_ci_timeout_test
 run_webhook_retry_and_lock_test
 run_merged_base_integrity_test
+run_merged_reviewed_head_integrity_test
+run_cross_issue_merge_ready_store_lock_test
 finish_tests 'dayflow_runner_integration_test'

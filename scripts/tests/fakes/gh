@@ -4,6 +4,16 @@ set -euo pipefail
 printf '%s\n' "$*" >>"${FAKE_GH_LOG:?}"
 
 branch="${FAKE_PR_BRANCH:-feature/tasks-29-replace-symphony-with-dayflow-local-runner}"
+previous=""
+for arg in "$@"; do
+  if [[ "$previous" == "--head" ]]; then
+    branch="$arg"
+    break
+  fi
+  previous="$arg"
+done
+pr_number="$(sed -nE 's#.*tasks-([0-9]+)-.*#\1#p' <<<"$branch")"
+pr_number="${pr_number:-29}"
 head_sha="${FAKE_GH_HEAD_SHA_OVERRIDE:-}"
 if [[ -z "$head_sha" && -n "${FAKE_GIT_ROOT:-}" ]]; then
   head_sha="$(git -C "$FAKE_GIT_ROOT" ls-remote --heads origin "refs/heads/$branch" | awk 'NR == 1 {print $1}')"
@@ -55,10 +65,10 @@ case "${1:-}" in
       [[ "$arg" == "all" ]] || continue
       state="${FAKE_GH_PR_STATE:-OPEN}"
     done
-    jq -n --arg body "$proof_body" --argjson draft "$draft" --arg state "$state" \
+    jq -n --arg body "$proof_body" --argjson draft "$draft" --arg state "$state" --argjson number "$pr_number" \
       --arg branch "$branch" --arg head "$head_sha" --arg base "${FAKE_GH_BASE_BRANCH:-develop}" \
       --arg merge "${FAKE_GH_MERGE_STATE:-CLEAN}" \
-      '[{number: 29, url: "https://github.test/pr/29", isDraft: $draft, state: $state, headRefName: $branch, headRefOid: $head, baseRefName: $base, mergeStateStatus: $merge, body: $body}]'
+      '[{number: $number, url: ("https://github.test/pr/" + ($number | tostring)), isDraft: $draft, state: $state, headRefName: $branch, headRefOid: $head, baseRefName: $base, mergeStateStatus: $merge, body: $body}]'
     ;;
   ready)
     if [[ "$*" == *"--undo"* ]]; then
