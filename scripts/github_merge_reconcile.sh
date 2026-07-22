@@ -57,26 +57,89 @@ dayflow_github_request() {
   "$DAYFLOW_CURL_BIN" "${args[@]}" "${DAYFLOW_GITHUB_API_URL}${path}"
 }
 
-dayflow_github_has_marker() {
+dayflow_notification_marker() {
+  local issue_key="$1"
+  local pr_number="$2"
+  local state="$3"
+  printf '<!-- dayflow-merge-reconcile:v2 issue=%s pr=%s state=%s -->' \
+    "$issue_key" "$pr_number" "$state"
+}
+
+dayflow_github_notification_state() {
   local repository="$1"
   local pr_number="$2"
-  local marker="$3"
-  local page=1 response count
+  local issue_key="$3"
+  local legacy_marker claimed_marker retryable_marker superseded_marker delivered_marker
+  local page=1 response count page_state
+  local state='{"legacy_delivered":false,"entries":[]}'
+  legacy_marker="<!-- dayflow-merge-reconcile:v1 issue=${issue_key} pr=${pr_number} discord=delivered -->"
+  claimed_marker="$(dayflow_notification_marker "$issue_key" "$pr_number" claimed)"
+  retryable_marker="$(dayflow_notification_marker "$issue_key" "$pr_number" retryable)"
+  superseded_marker="$(dayflow_notification_marker "$issue_key" "$pr_number" superseded)"
+  delivered_marker="$(dayflow_notification_marker "$issue_key" "$pr_number" delivered)"
+
   while true; do
-    response="$(dayflow_github_request GET "/repos/${repository}/issues/${pr_number}/comments?per_page=100&page=${page}")" || return 2
+    response="$(dayflow_github_request GET "/repos/${repository}/issues/${pr_number}/comments?per_page=100&page=${page}")" || return 1
     jq -e 'type == "array"' >/dev/null <<<"$response" || {
       dayflow_error 'GitHub returned a malformed PR comment list'
-      return 2
+      return 1
     }
-    if jq -e --arg marker "$marker" \
-      'any(.[]; .user.login == "github-actions[bot]" and ((.body // "") | contains($marker)))' \
-      >/dev/null <<<"$response"; then
+    page_state="$(jq -c \
+      --arg legacy "$legacy_marker" \
+      --arg claimed "$claimed_marker" \
+      --arg retryable "$retryable_marker" \
+      --arg superseded "$superseded_marker" \
+      --arg delivered "$delivered_marker" '
+        def bot_comment:
+          type == "object" and .user.login == "github-actions[bot]" and
+          ((.body // "") | type) == "string";
+        {
+          legacy_delivered: any(.[]; bot_comment and (.body | contains($legacy))),
+          entries: [
+            .[] |
+            select(bot_comment and (.id | type) == "number" and .id > 0 and (.id | floor) == .id) |
+            if (.body | contains($claimed)) then {id, state: "claimed"}
+            elif (.body | contains($retryable)) then {id, state: "retryable"}
+            elif (.body | contains($superseded)) then {id, state: "superseded"}
+            elif (.body | contains($delivered)) then {id, state: "delivered"}
+            else empty
+            end
+          ]
+        }
+      ' <<<"$response")" || {
+      dayflow_error 'GitHub returned malformed PR comment data'
+      return 1
+    }
+    state="$(jq -cn --argjson current "$state" --argjson page "$page_state" '
+      {
+        legacy_delivered: ($current.legacy_delivered or $page.legacy_delivered),
+        entries: ($current.entries + $page.entries)
+      }
+    ')"
+    count="$(jq 'length' <<<"$response")"
+    if (( count != 100 )); then
+      printf '%s\n' "$state"
       return 0
     fi
-    count="$(jq 'length' <<<"$response")"
-    (( count == 100 )) || return 1
     page=$((page + 1))
   done
+}
+
+dayflow_github_set_notification_state() {
+  local repository="$1"
+  local comment_id="$2"
+  local issue_key="$3"
+  local pr_number="$4"
+  local state="$5"
+  local detail="$6"
+  local marker body payload response
+  marker="$(dayflow_notification_marker "$issue_key" "$pr_number" "$state")"
+  body="$(printf '%s\n\n%s' "$marker" "$detail")"
+  payload="$(jq -cn --arg body "$body" '{body: $body}')"
+  response="$(dayflow_github_request PATCH "/repos/${repository}/issues/comments/${comment_id}" "$payload")" || return 1
+  jq -e --argjson id "$comment_id" --arg marker "$marker" '
+    .id == $id and ((.body // "") | type) == "string" and (.body | contains($marker))
+  ' >/dev/null <<<"$response"
 }
 
 dayflow_require_command jq
@@ -92,15 +155,23 @@ jq -e 'type == "object"' "$event_path" >/dev/null 2>&1 || {
   exit 1
 }
 
-action="$(jq -r '.action // ""' "$event_path")"
-merged="$(jq -r '.pull_request.merged // false' "$event_path")"
+action="$(jq -r 'if (.action | type) == "string" then .action else "" end' "$event_path")"
+merged="$(jq -r '
+  if ((.pull_request | type) == "object" and (.pull_request.merged | type) == "boolean")
+  then .pull_request.merged
+  else false
+  end
+' "$event_path")"
 [[ "$action" == "closed" && "$merged" == "true" ]] || dayflow_noop 'event is not a merged pull request'
 
-base_branch="$(jq -r '.pull_request.base.ref // ""' "$event_path")"
-head_branch="$(jq -r '.pull_request.head.ref // ""' "$event_path")"
-repository="$(jq -r '.repository.full_name // ""' "$event_path")"
-head_repository="$(jq -r '.pull_request.head.repo.full_name // ""' "$event_path")"
-pr_number="$(jq -r '.pull_request.number // ""' "$event_path")"
+base_branch="$(jq -r 'try (.pull_request.base.ref) catch "" | if type == "string" then . else "" end' "$event_path")"
+head_branch="$(jq -r 'try (.pull_request.head.ref) catch "" | if type == "string" then . else "" end' "$event_path")"
+repository="$(jq -r 'try (.repository.full_name) catch "" | if type == "string" then . else "" end' "$event_path")"
+head_repository="$(jq -r 'try (.pull_request.head.repo.full_name) catch "" | if type == "string" then . else "" end' "$event_path")"
+pr_number="$(jq -r '
+  try (.pull_request.number) catch null |
+  if type == "number" and . > 0 and floor == . then tostring else "" end
+' "$event_path")"
 
 [[ "$base_branch" == "develop" ]] || dayflow_noop 'merged pull request does not target develop'
 [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || dayflow_noop 'event repository is malformed'
@@ -127,47 +198,107 @@ pr_url="https://github.com/${repository}/pull/${pr_number}"
   exit 1
 }
 
-marker="<!-- dayflow-merge-reconcile:v1 issue=${issue_key} pr=${pr_number} discord=delivered -->"
-if dayflow_github_has_marker "$repository" "$pr_number" "$marker"; then
+notification_state="$(dayflow_github_notification_state "$repository" "$pr_number" "$issue_key")" || {
+  dayflow_error "unable to verify completion notification state for ${issue_key}"
+  exit 1
+}
+if jq -e '.legacy_delivered or any(.entries[]; .state == "delivered")' >/dev/null <<<"$notification_state"; then
   dayflow_log "completion notification already recorded for ${issue_key}"
   exit 0
-else
-  marker_status=$?
-  if (( marker_status != 1 )); then
-    dayflow_error "unable to verify completion dedupe state for ${issue_key}"
+fi
+if jq -e 'any(.entries[]; .state == "claimed")' >/dev/null <<<"$notification_state"; then
+  dayflow_error "completion notification for ${issue_key} has an unresolved claim; operator reconciliation is required"
+  exit 1
+fi
+
+claim_marker="$(dayflow_notification_marker "$issue_key" "$pr_number" claimed)"
+claim_body="$(printf '%s\n\nDayFlow completion delivery is claimed. An unresolved claim must be reconciled before retrying Discord.' "$claim_marker")"
+claim_payload="$(jq -cn --arg body "$claim_body" '{body: $body}')"
+claim_response="$(dayflow_github_request POST "/repos/${repository}/issues/${pr_number}/comments" "$claim_payload")" || {
+  dayflow_error "unable to create the ${issue_key} completion delivery claim; Linear and Discord were not mutated"
+  exit 1
+}
+claim_id="$(jq -er 'select((.id | type) == "number" and .id > 0 and (.id | floor) == .id) | .id' <<<"$claim_response")" || {
+  dayflow_error "GitHub did not confirm the ${issue_key} completion delivery claim; operator reconciliation is required"
+  exit 1
+}
+
+notification_state="$(dayflow_github_notification_state "$repository" "$pr_number" "$issue_key")" || {
+  dayflow_error "unable to verify the ${issue_key} completion delivery claim; operator reconciliation is required"
+  exit 1
+}
+if jq -e '.legacy_delivered or any(.entries[]; .state == "delivered")' >/dev/null <<<"$notification_state"; then
+  dayflow_log "completion notification already recorded for ${issue_key}"
+  exit 0
+fi
+if ! jq -e --argjson id "$claim_id" 'any(.entries[]; .id == $id and .state == "claimed")' \
+  >/dev/null <<<"$notification_state"; then
+  dayflow_error "the ${issue_key} completion delivery claim could not be verified; operator reconciliation is required"
+  exit 1
+fi
+winning_claim_id="$(jq -r '[.entries[] | select(.state == "claimed") | .id] | min // empty' <<<"$notification_state")"
+if [[ "$winning_claim_id" != "$claim_id" ]]; then
+  if ! dayflow_github_set_notification_state "$repository" "$claim_id" "$issue_key" "$pr_number" superseded \
+    'Another durable claim won delivery ownership; this claim must not send Discord.'; then
+    dayflow_error "unable to supersede the losing ${issue_key} claim; operator reconciliation is required"
     exit 1
   fi
+  dayflow_log "another completion delivery claim owns ${issue_key}; Discord was not called"
+  exit 0
 fi
+
+dayflow_fail_before_discord() {
+  local message="$1"
+  local detail="$2"
+  if ! dayflow_github_set_notification_state "$repository" "$claim_id" "$issue_key" "$pr_number" retryable "$detail"; then
+    dayflow_error "${message}; claim ${claim_id} could not be released and requires operator reconciliation"
+    exit 1
+  fi
+  dayflow_error "${message}; claim ${claim_id} was released for rerun"
+  exit 1
+}
 
 issue_query='query MergeReconcileIssue($issueId: String!) { issue(id: $issueId) { id identifier state { name } team { states { nodes { id name } } } } }'
 issue_variables="$(jq -cn --arg issue_id "$issue_key" '{issueId: $issue_id}')"
 issue_response="$(dayflow_linear_request "$issue_query" "$issue_variables")" || {
-  dayflow_error "unable to read ${issue_key} from Linear"
-  exit 1
+  dayflow_fail_before_discord "unable to read ${issue_key} from Linear" \
+    'Linear could not be read before Discord delivery; this claim is safe to retry.'
 }
-linear_issue_id="$(jq -r '.data.issue.id // ""' <<<"$issue_response")"
-linear_identifier="$(jq -r '.data.issue.identifier // ""' <<<"$issue_response")"
-linear_state="$(jq -r '.data.issue.state.name // ""' <<<"$issue_response")"
-done_state_id="$(jq -r --arg name "$DAYFLOW_LINEAR_DONE_STATE" \
-  '.data.issue.team.states.nodes[]? | select(.name == $name) | .id' <<<"$issue_response" | head -n 1)"
-[[ -n "$linear_issue_id" && "$linear_identifier" == "$issue_key" && -n "$done_state_id" ]] || {
-  dayflow_error "Linear issue or ${DAYFLOW_LINEAR_DONE_STATE} state did not match ${issue_key}"
-  exit 1
-}
+if ! linear_fields="$(jq -er --arg issue_key "$issue_key" --arg done_name "$DAYFLOW_LINEAR_DONE_STATE" '
+  .data.issue as $issue |
+  select(($issue | type) == "object") |
+  select(($issue.id | type) == "string" and ($issue.id | length) > 0) |
+  select(($issue.identifier | type) == "string" and $issue.identifier == $issue_key) |
+  select(($issue.state.name | type) == "string" and ($issue.state.name | length) > 0) |
+  select(($issue.team.states.nodes | type) == "array") |
+  [$issue.team.states.nodes[] |
+    select(type == "object" and (.name | type) == "string" and .name == $done_name and
+      (.id | type) == "string" and (.id | length) > 0) |
+    .id
+  ] as $done_state_ids |
+  select(($done_state_ids | length) > 0) |
+  [$issue.id, $issue.identifier, $issue.state.name, $done_state_ids[0]] |
+  select(all(.[]; test("[\\t\\r\\n]") | not)) |
+  @tsv
+' <<<"$issue_response")"; then
+  dayflow_fail_before_discord "Linear issue or ${DAYFLOW_LINEAR_DONE_STATE} state did not match ${issue_key}" \
+    'Linear validation failed before Discord delivery; this claim is safe to retry.'
+fi
+IFS=$'\t' read -r linear_issue_id linear_identifier linear_state done_state_id <<<"$linear_fields"
 
 if [[ "$linear_state" != "$DAYFLOW_LINEAR_DONE_STATE" ]]; then
   mutation='mutation UpdateIssueState($issueId: String!, $stateId: String!) { issueUpdate(id: $issueId, input: { stateId: $stateId }) { success issue { id state { name } } } }'
   mutation_variables="$(jq -cn --arg issue_id "$linear_issue_id" --arg state_id "$done_state_id" \
     '{issueId: $issue_id, stateId: $state_id}')"
   mutation_response="$(dayflow_linear_request "$mutation" "$mutation_variables")" || {
-    dayflow_error "Linear rejected the ${issue_key} Done transition"
-    exit 1
+    dayflow_fail_before_discord "Linear rejected the ${issue_key} Done transition" \
+      'Linear did not accept the Done transition before Discord delivery; this claim is safe to retry.'
   }
   jq -e --arg name "$DAYFLOW_LINEAR_DONE_STATE" \
     '.data.issueUpdate.success == true and .data.issueUpdate.issue.state.name == $name' \
     >/dev/null <<<"$mutation_response" || {
-      dayflow_error "Linear did not confirm the ${issue_key} Done transition"
-      exit 1
+      dayflow_fail_before_discord "Linear did not confirm the ${issue_key} Done transition" \
+        'Linear did not confirm Done before Discord delivery; this claim is safe to retry.'
     }
   dayflow_log "moved ${issue_key} to ${DAYFLOW_LINEAR_DONE_STATE}"
 else
@@ -177,17 +308,36 @@ fi
 notification_body="$(printf 'PR #%s merged into develop.\n%s' "$pr_number" "$pr_url")"
 discord_payload="$(jq -cn --arg title "DayFlow ${issue_key} -> Done" --arg description "$notification_body" \
   '{embeds: [{title: $title, description: $description, color: 5763719}], allowed_mentions: {parse: []}}')"
-if ! "$DAYFLOW_CURL_BIN" -fsS -X POST "$DAYFLOW_DISCORD_WEBHOOK_URL" \
-  -H 'Content-Type: application/json' --data "$discord_payload" >/dev/null; then
-  dayflow_error "Discord completion delivery failed for ${issue_key}; rerun this workflow to retry"
+if discord_http_status="$("$DAYFLOW_CURL_BIN" -sS --output /dev/null --write-out '%{http_code}' \
+  -X POST "$DAYFLOW_DISCORD_WEBHOOK_URL" \
+  -H 'Content-Type: application/json' --data "$discord_payload")"; then
+  discord_transport_status=0
+else
+  discord_transport_status=$?
+fi
+
+if (( discord_transport_status != 0 )); then
+  dayflow_error "Discord transport outcome is ambiguous for ${issue_key}; claim ${claim_id} requires operator reconciliation"
+  exit 1
+fi
+if [[ "$discord_http_status" =~ ^[1-5][0-9][0-9]$ && ! "$discord_http_status" =~ ^2[0-9][0-9]$ ]]; then
+  if ! dayflow_github_set_notification_state "$repository" "$claim_id" "$issue_key" "$pr_number" retryable \
+    "Discord definitively rejected delivery with HTTP ${discord_http_status}; a later run may create a new claim."; then
+    dayflow_error "Discord rejected ${issue_key}, but the claim could not be made retryable; operator reconciliation is required"
+    exit 1
+  fi
+  dayflow_error "Discord rejected ${issue_key} with HTTP ${discord_http_status}; rerun this workflow to retry"
+  exit 1
+fi
+if [[ ! "$discord_http_status" =~ ^2[0-9][0-9]$ ]]; then
+  dayflow_error "Discord returned ambiguous HTTP status ${discord_http_status:-unknown} for ${issue_key}; claim ${claim_id} requires operator reconciliation"
   exit 1
 fi
 
-comment_body="$(printf '%s\n\nDayFlow merge lifecycle reconciled: `%s` is Done and completion delivery succeeded.' "$marker" "$issue_key")"
-comment_payload="$(jq -cn --arg body "$comment_body" '{body: $body}')"
-if ! dayflow_github_request POST "/repos/${repository}/issues/${pr_number}/comments" "$comment_payload" >/dev/null; then
-  dayflow_error "Discord delivered, but GitHub could not persist the ${issue_key} dedupe marker"
+if ! dayflow_github_set_notification_state "$repository" "$claim_id" "$issue_key" "$pr_number" delivered \
+  "DayFlow merge lifecycle reconciled: ${issue_key} is Done and Discord accepted the completion delivery."; then
+  dayflow_error "Discord accepted ${issue_key}, but claim ${claim_id} could not be marked delivered; do not retry automatically"
   exit 1
 fi
 
-dayflow_log "recorded completion delivery for ${issue_key} on PR #${pr_number}"
+dayflow_log "recorded completion delivery for ${issue_key} on PR #${pr_number} claim ${claim_id}"

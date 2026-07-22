@@ -4,18 +4,14 @@ set -euo pipefail
 url=''
 payload=''
 method='GET'
+write_out=''
 args=("$@")
 for ((index = 0; index < ${#args[@]}; index++)); do
   case "${args[$index]}" in
-    -X)
-      method="${args[$((index + 1))]}"
-      ;;
-    --data)
-      payload="${args[$((index + 1))]}"
-      ;;
-    http://*|https://*)
-      url="${args[$index]}"
-      ;;
+    -X) method="${args[$((index + 1))]}" ;;
+    --data) payload="${args[$((index + 1))]}" ;;
+    --write-out|-w) write_out="${args[$((index + 1))]}" ;;
+    http://*|https://*) url="${args[$index]}" ;;
   esac
 done
 
@@ -28,7 +24,23 @@ increment_counter() {
   printf '%s\n' "$((current + 1))" >"$file"
 }
 
+load_comments() {
+  if [[ ! -f "${FAKE_GITHUB_MARKER_FILE:?}" ]]; then
+    printf '%s\n' '[]'
+  elif jq -e 'type == "array"' "$FAKE_GITHUB_MARKER_FILE" >/dev/null 2>&1; then
+    jq -c '.' "$FAKE_GITHUB_MARKER_FILE"
+  else
+    jq -cn --arg body "$(<"$FAKE_GITHUB_MARKER_FILE")" \
+      '[{id: 122, body: $body, user: {login: "github-actions[bot]"}}]'
+  fi
+}
+
+save_comments() {
+  printf '%s\n' "$1" >"${FAKE_GITHUB_MARKER_FILE:?}"
+}
+
 if [[ "$url" == "${DAYFLOW_LINEAR_API_URL:?}" ]]; then
+  increment_counter "${FAKE_LINEAR_REQUEST_COUNT:?}"
   if [[ "$payload" == *'UpdateIssueState'* ]]; then
     increment_counter "${FAKE_LINEAR_MUTATION_COUNT:?}"
     [[ "${FAKE_LINEAR_MUTATION_FAIL:-false}" != "true" ]] || {
@@ -38,32 +50,57 @@ if [[ "$url" == "${DAYFLOW_LINEAR_API_URL:?}" ]]; then
     printf '%s\n' 'Done' >"${FAKE_LINEAR_STATE_FILE:?}"
     printf '%s\n' '{"data":{"issueUpdate":{"success":true,"issue":{"id":"linear-30","state":{"name":"Done"}}}}}'
   else
+    if [[ "${FAKE_LINEAR_MALFORMED_QUERY:-false}" == "true" ]]; then
+      printf '%s\n' '{"data":{"issue":{"id":17,"identifier":"CEN-30","state":{"name":["In Review"]},"team":{"states":{"nodes":"malformed"}}}}}'
+      exit 0
+    fi
     state='In Review'
     [[ ! -f "${FAKE_LINEAR_STATE_FILE:?}" ]] || state="$(<"$FAKE_LINEAR_STATE_FILE")"
     jq -cn --arg state "$state" '{data: {issue: {id: "linear-30", identifier: "CEN-30", state: {name: $state}, team: {states: {nodes: [{id: "done-state", name: "Done"}]}}}}}'
   fi
 elif [[ "$url" == *'/comments?per_page='* ]]; then
   [[ "${FAKE_GITHUB_LIST_FAIL:-false}" != "true" ]] || exit 22
-  if [[ -f "${FAKE_GITHUB_MARKER_FILE:?}" ]]; then
-    jq -cn --arg body "$(<"$FAKE_GITHUB_MARKER_FILE")" '[{body: $body, user: {login: "github-actions[bot]"}}]'
-  else
-    printf '%s\n' '[]'
-  fi
-elif [[ "$url" == *'/comments' && "$method" == 'POST' ]]; then
+  load_comments
+elif [[ "$url" == *'/issues/'*'/comments' && "$method" == 'POST' ]]; then
+  [[ "${FAKE_GITHUB_CLAIM_CREATE_FAIL:-false}" != "true" ]] || exit 22
   increment_counter "${FAKE_GITHUB_COMMENT_COUNT:?}"
-  [[ "${FAKE_GITHUB_COMMENT_FAIL:-false}" != "true" ]] || exit 22
-  jq -r '.body' <<<"$payload" >"${FAKE_GITHUB_MARKER_FILE:?}"
-  printf '%s\n' '{"id":123}'
+  comments="$(load_comments)"
+  body="$(jq -r '.body' <<<"$payload")"
+  next_id="$(jq '[.[].id] | max // 122 | . + 1' <<<"$comments")"
+  if [[ "${FAKE_GITHUB_CONCURRENT_CLAIM:-false}" == "true" ]]; then
+    comments="$(jq -c --argjson id "$next_id" --arg body "$body" \
+      '. + [{id: $id, body: $body, user: {login: "github-actions[bot]"}}]' <<<"$comments")"
+    next_id=$((next_id + 1))
+  fi
+  comments="$(jq -c --argjson id "$next_id" --arg body "$body" \
+    '. + [{id: $id, body: $body, user: {login: "github-actions[bot]"}}]' <<<"$comments")"
+  save_comments "$comments"
+  jq -cn --argjson id "$next_id" --arg body "$body" '{id: $id, body: $body}'
+elif [[ "$url" == *'/issues/comments/'* && "$method" == 'PATCH' ]]; then
+  increment_counter "${FAKE_GITHUB_COMMENT_UPDATE_COUNT:?}"
+  body="$(jq -r '.body' <<<"$payload")"
+  if [[ "${FAKE_GITHUB_DELIVERED_UPDATE_FAIL:-false}" == "true" && "$body" == *'state=delivered'* ]]; then
+    exit 22
+  fi
+  comment_id="${url##*/}"
+  comments="$(load_comments)"
+  jq -e --argjson id "$comment_id" 'any(.[]; .id == $id)' >/dev/null <<<"$comments" || exit 22
+  comments="$(jq -c --argjson id "$comment_id" --arg body "$body" \
+    'map(if .id == $id then .body = $body else . end)' <<<"$comments")"
+  save_comments "$comments"
+  jq -cn --argjson id "$comment_id" --arg body "$body" '{id: $id, body: $body}'
 elif [[ "$url" == "${DAYFLOW_DISCORD_WEBHOOK_URL:?}" ]]; then
   increment_counter "${FAKE_DISCORD_COUNT:?}"
+  [[ "${FAKE_DISCORD_TRANSPORT_FAIL:-false}" != "true" ]] || exit 7
+  status=204
   if [[ -f "${FAKE_DISCORD_FAILURES_FILE:?}" ]]; then
     failures="$(<"$FAKE_DISCORD_FAILURES_FILE")"
     if (( failures > 0 )); then
       printf '%s\n' "$((failures - 1))" >"$FAKE_DISCORD_FAILURES_FILE"
-      exit 22
+      status=500
     fi
   fi
-  printf '%s\n' '{}'
+  [[ -z "$write_out" ]] || printf '%s' "${write_out//\%\{http_code\}/$status}"
 else
   printf 'unexpected fake curl request: %s %s\n' "$method" "$url" >&2
   exit 1
