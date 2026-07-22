@@ -1,183 +1,46 @@
-# DayFlow Orchestration Failure Taxonomy
+# DayFlow Runner Failure Taxonomy
 
-This document captures recurring failure modes discovered while running DayFlow through Symphony.
-The goal is to turn one-off firefighting into reusable outer-loop guardrails for future projects.
+Every failure is handled in this order: stop resource waste, preserve useful work, restore truthful state, notify the operator, and require a deliberate retry.
 
-## Core principle
+## Failure Classes
 
-- do not treat an issue failure as only an issue failure
-- identify which layer failed:
-  - Symphony runtime
-  - outer orchestration supervisor
-  - issue lifecycle state reconciliation
-  - primary implementation agent
-  - review / proof / merge closure
-- add a reusable guard or recovery rule before moving on
+### F1. Admission Failure
 
-## Failure classes
+Required issue metadata is absent, malformed, or names an unsupported Primary Agent. The issue is blocked before a worktree or model execution is created.
 
-### F1. Empty workspace spin
+### F2. Ownership Failure
 
-Symptoms:
+An `In Progress` or `In Review` issue lacks a state file, worktree, matching branch, or Primary Agent session. Resume fails closed; the runner never creates a replacement workspace over possible work.
 
-- `Todo` or `In Progress` issue has no real workspace contents
-- Symphony child is alive
-- tokens keep increasing
-- dashboard may show activity without usable artifacts
+### F3. Model Failure
 
-Recovery:
+The configured model is unavailable, rejected, or inaccessible. No fallback is attempted. The worktree is retained and the issue moves to `Blocked` when that Linear state exists.
 
-- kill the current child runtime
-- preserve supervisor loop
-- retry from a fresh workspace
+### F4. Resource Limit
 
-Guard:
+Aggregate tokens exceed 120K, output makes no progress for five minutes, or an invocation reaches 20 minutes. The Codex child is terminated and the issue is blocked with local evidence.
 
-- `scripts/guard_empty_workspace_spins.sh`
+### F5. Delivery Failure
 
-### F2. State / ownership mismatch
+The Primary Agent completes without the correct branch, commit, push, develop-targeted PR, or proof sections. The incomplete workspace is preserved and the issue is blocked.
 
-Symptoms:
+### F6. Review Failure
 
-- workspace exists and branch exists
-- issue still shows `Todo`
-- code changes may already exist
+P0-P2 findings trigger one same-session remediation. Remaining blockers after rereview stop the run. P3 findings and residual risks remain visible but do not automatically block.
 
-Recovery:
+### F7. Reconciliation Failure
 
-- promote owned workspace issue to `In Progress`
+Linear, GitHub, or Discord is temporarily unavailable. Local state remains authoritative for ownership, external mutation is not guessed, and `reconcile` can be rerun after service recovery.
 
-Guard:
+### F8. Lock Conflict
 
-- `scripts/reconcile_issue_ownership.sh`
+A live per-issue lock rejects concurrent execution. A lock whose PID no longer exists is recovered without touching the worktree.
 
-### F3. Dirty workspace without PR
+## Reusable Rules
 
-Symptoms:
-
-- issue branch contains uncommitted work
-- no PR exists
-- child runtime keeps consuming turns or tokens
-- the issue is not progressing toward review
-
-Recovery:
-
-- stop the current child runtime
-- keep the dirty workspace for continuation or manual review
-- do not silently restart the same issue immediately
-
-Guard:
-
-- `scripts/guard_issue_sessions.sh`
-
-### F4. Completed turn without lifecycle closure
-
-Symptoms:
-
-- Codex emits `task_complete`
-- no PR exists and no valid completion artifact exists
-- issue remains runnable and gets picked again
-
-Recovery:
-
-- validate branch, diff, PR, and recent activity
-- return the issue to `Todo` when the run produced no reviewable output
-
-Guard:
-
-- `scripts/validate_issue_outcomes.sh`
-
-### F5. Review finding loop break
-
-Symptoms:
-
-- PR receives review findings
-- issue stays in `In Review`
-- implementation owner does not regain control
-
-Recovery:
-
-- return issue to retry queue
-- move PR back to draft when needed
-
-Guard:
-
-- `scripts/reconcile_review_feedback.sh`
-
-### F6. Dashboard / runtime observability mismatch
-
-Symptoms:
-
-- Linear shows `In Progress`
-- workspace has a branch or diff
-- dashboard does not show an active issue session
-
-Recovery:
-
-- trust workspace + branch + diff over dashboard alone
-- use outer-loop guards to decide whether to preserve, retry, or block the issue
-
-Follow-up:
-
-- improve supervisor health summaries so active ownership can be inferred even when dashboard session display lags
-
-### F7. Branch bootstrap stall
-
-Symptoms:
-
-- fresh workspace exists
-- branch remains `develop`
-- no diff appears
-- issue stays in `Todo`
-
-Recovery:
-
-- treat the workspace as an invalid bootstrap attempt
-- move the stale workspace aside
-- keep the supervisor alive
-- retry from a fresh workspace
-- stale workspaces must not count as active ownership on later reconciliation passes
-
-Guard:
-
-- `scripts/guard_branch_bootstrap_stalls.sh`
-
-### F8. Branch-only stall
-
-Symptoms:
-
-- issue branch exists
-- workspace is still clean
-- `HEAD == origin/develop`
-- no PR exists
-
-Recovery:
-
-- treat the branch as a failed bootstrap continuation
-- move the workspace aside as stale
-- retry from a fresh workspace
-
-Guard:
-
-- `scripts/guard_issue_sessions.sh`
-
-## Recovery priorities
-
-When a failure occurs, apply this order:
-
-1. stop uncontrolled token burn
-2. preserve useful workspace artifacts
-3. restore correct issue state
-4. decide between continue, retry, or block
-5. add or strengthen a reusable guard
-
-## Reusable design rules
-
-- only `Todo` is a runnable queue state
-- `In Progress` is an ownership state, not a runnable queue state
-- dirty work should not be silently discarded
-- a child runtime should be killable without tearing down the whole supervisor
-- every repeated failure must become either:
-  - a scripted guard
-  - a documented recovery rule
-  - an explicit blocked condition
+- only `Todo` creates new work
+- resumable work requires explicit local ownership state
+- dirty or committed work is never silently deleted
+- deterministic state and notification work stays outside model prompts
+- every execution has token, progress, and wall-clock bounds
+- a blocked issue requires operator intent before retry

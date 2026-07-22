@@ -3,10 +3,18 @@ name: Harness CI
 on:
   push:
     paths:
+      - "AGENTS.md"
+      - ".codex/agents/**"
+      - ".codex/skills/**"
+      - "docs/**"
       - "scripts/**"
       - ".github/workflows/harness-ci.yml"
   pull_request:
     paths:
+      - "AGENTS.md"
+      - ".codex/agents/**"
+      - ".codex/skills/**"
+      - "docs/**"
       - "scripts/**"
       - ".github/workflows/harness-ci.yml"
 
@@ -15,14 +23,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate harness bash syntax
+      - name: Install ripgrep
         run: |
-          bash -n \
-            scripts/lib/dayflow_harness.sh \
-            scripts/lib/dayflow_notifications.sh \
-            scripts/sync_linear_pr_states.sh \
-            scripts/reconcile_review_feedback.sh \
-            scripts/collect_pr_proof.sh \
-            scripts/update_pr_proof.sh \
-            scripts/notify_merge_ready_prs.sh \
-            scripts/run_symphony.sh
+          sudo apt-get update
+          sudo apt-get install --yes ripgrep
+      - name: Verify toolchain
+        run: |
+          command -v git
+          command -v jq
+          command -v rg
+      - name: Audit harness drift and shell syntax
+        run: scripts/audit_harness_drift.sh
+      - name: Run local runner tests
+        run: scripts/tests/run_dayflow_runner_tests.sh

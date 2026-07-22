@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >>"${FAKE_GH_LOG:?}"
+
+branch="${FAKE_PR_BRANCH:-feature/tasks-29-replace-symphony-with-dayflow-local-runner}"
+previous=""
+for arg in "$@"; do
+  if [[ "$previous" == "--head" ]]; then
+    branch="$arg"
+    break
+  fi
+  previous="$arg"
+done
+pr_number="$(sed -nE 's#.*tasks-([0-9]+)-.*#\1#p' <<<"$branch")"
+pr_number="${pr_number:-29}"
+head_sha="${FAKE_GH_HEAD_SHA_OVERRIDE:-}"
+if [[ -z "$head_sha" && -n "${FAKE_GIT_ROOT:-}" ]]; then
+  head_sha="$(git -C "$FAKE_GIT_ROOT" ls-remote --heads origin "refs/heads/$branch" | awk 'NR == 1 {print $1}')"
+fi
+head_sha="${head_sha:-fake-head-sha}"
+
+proof_body='## Summary
+
+- Fake delivery.
+
+## Changed files
+
+- runner-result.txt
+
+## Behavior implemented
+
+- Implemented the fixture path.
+
+## Tests run
+
+- Fake test suite.
+
+## Review feedback addressed
+
+- No unresolved findings.
+
+## Complexity snapshot
+
+- One fixture file.
+
+## Risks or follow-ups
+
+- None.
+
+## Next suggested issue
+
+- CEN-28.'
+
+if [[ "${1:-}" != "pr" ]]; then
+  exit 2
+fi
+shift
+case "${1:-}" in
+  list)
+    draft=true
+    [[ -f "${FAKE_GH_READY_FILE:?}" ]] && draft=false
+    state="OPEN"
+    for arg in "$@"; do
+      [[ "$arg" == "all" ]] || continue
+      state="${FAKE_GH_PR_STATE:-OPEN}"
+    done
+    jq -n --arg body "$proof_body" --argjson draft "$draft" --arg state "$state" --argjson number "$pr_number" \
+      --arg branch "$branch" --arg head "$head_sha" --arg base "${FAKE_GH_BASE_BRANCH:-develop}" \
+      --arg merge "${FAKE_GH_MERGE_STATE:-CLEAN}" \
+      '[{number: $number, url: ("https://github.test/pr/" + ($number | tostring)), isDraft: $draft, state: $state, headRefName: $branch, headRefOid: $head, baseRefName: $base, mergeStateStatus: $merge, body: $body}]'
+    ;;
+  ready)
+    if [[ "$*" == *"--undo"* ]]; then
+      rm -f "${FAKE_GH_READY_FILE:?}"
+    else
+      : >"${FAKE_GH_READY_FILE:?}"
+    fi
+    ;;
+  checks)
+    check_mode="${FAKE_GH_CHECK_MODE:-pass}"
+    if [[ -n "${FAKE_GH_PENDING_COUNT_FILE:-}" && -f "$FAKE_GH_PENDING_COUNT_FILE" ]]; then
+      pending_count="$(<"$FAKE_GH_PENDING_COUNT_FILE")"
+      if (( pending_count > 0 )); then
+        printf '%s\n' "$((pending_count - 1))" >"$FAKE_GH_PENDING_COUNT_FILE"
+        check_mode=pending
+      fi
+    fi
+    case "$check_mode" in
+      pass) printf '%s\n' '[{"bucket":"pass","name":"Harness CI","state":"SUCCESS"}]' ;;
+      fail) printf '%s\n' '[{"bucket":"fail","name":"Harness CI","state":"FAILURE"}]' ;;
+      *) printf '%s\n' '[{"bucket":"pending","name":"Harness CI","state":"PENDING"}]' ;;
+    esac
+    ;;
+  view)
+    printf '%s\n' '{"reviews":[],"commits":[{"committedDate":"2026-07-22T00:00:00Z"}]}'
+    ;;
+  comment)
+    if [[ -n "${FAKE_GH_COMMENTS_LOG:-}" ]]; then
+      for ((i = 1; i <= $#; i++)); do
+        if [[ "${!i}" == "--body-file" ]]; then
+          next=$((i + 1))
+          printf '%s\n' '--- comment ---' >>"$FAKE_GH_COMMENTS_LOG"
+          cat "${!next}" >>"$FAKE_GH_COMMENTS_LOG"
+        fi
+      done
+    fi
+    ;;
+  *)
+    exit 2
+    ;;
+esac

@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >>"${FAKE_CODEX_LOG:?}"
+if [[ -n "${FAKE_CODEX_INVOCATION_COUNT_FILE:-}" ]]; then
+  invocation_count=0
+  [[ -f "$FAKE_CODEX_INVOCATION_COUNT_FILE" ]] && invocation_count="$(<"$FAKE_CODEX_INVOCATION_COUNT_FILE")"
+  printf '%s\n' "$((invocation_count + 1))" >"$FAKE_CODEX_INVOCATION_COUNT_FILE"
+fi
+
+output_file=""
+worktree=""
+is_review=false
+is_resume=false
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case "${args[$i]}" in
+    -o|--output-last-message)
+      output_file="${args[$((i + 1))]}"
+      ;;
+    -C|--cd)
+      worktree="${args[$((i + 1))]}"
+      ;;
+    --output-schema)
+      is_review=true
+      ;;
+    resume)
+      is_resume=true
+      ;;
+  esac
+done
+
+if [[ -z "$worktree" ]]; then
+  worktree="$PWD"
+fi
+
+if [[ "$is_review" == "true" && "${FAKE_REQUIRE_DRAFT_REVIEW:-false}" == "true" ]]; then
+  [[ ! -f "${FAKE_GH_READY_FILE:?}" ]] || {
+    printf '%s\n' '{"type":"error","message":"review started while PR was ready"}'
+    exit 90
+  }
+  : >"${FAKE_REVIEW_DRAFT_MARKER:?}"
+fi
+if [[ "$is_review" == "true" && "${FAKE_REVIEW_MODE:-clean}" == "execution-fail" ]]; then
+  printf '%s\n' '{"type":"error","message":"fake review execution failure"}'
+  exit 1
+fi
+
+case "${FAKE_CODEX_MODE:-success}" in
+  model-rejected)
+    printf '%s\n' '{"type":"error","message":"model unavailable: access denied"}'
+    exit 1
+    ;;
+  token-limit)
+    printf '%s\n' '{"type":"thread.started","thread_id":"fake-token-session"}'
+    printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":100}}'
+    sleep 5
+    ;;
+  stall)
+    sleep 5
+    ;;
+  execution-limit)
+    printf '%s\n' '{"type":"thread.started","thread_id":"fake-slow-session"}'
+    while true; do
+      printf '%s\n' '{"type":"item.completed","item":{"type":"message"}}'
+      sleep 0.2
+    done
+    ;;
+  fast-overflow)
+    printf '%s\n' '{"type":"response.completed","response":{"usage":{"total_tokens":10}}}'
+    exit 0
+    ;;
+  spawn-child)
+    sleep 30 &
+    spawned_child=$!
+    printf '%s\n' "$$" >"${FAKE_CODEX_PARENT_PID_FILE:?}"
+    printf '%s\n' "$spawned_child" >"${FAKE_CODEX_CHILD_PID_FILE:?}"
+    wait "$spawned_child"
+    exit 0
+    ;;
+esac
+
+if [[ "$is_review" == "true" ]]; then
+  review_count_file="${FAKE_CODEX_REVIEW_COUNT_FILE:?}"
+  review_count=0
+  [[ -f "$review_count_file" ]] && review_count="$(<"$review_count_file")"
+  review_count=$((review_count + 1))
+  printf '%s\n' "$review_count" >"$review_count_file"
+  if [[ "${FAKE_REVIEW_MODE:-clean}" == "always-block" ]]; then
+    printf '%s\n' '{"findings":[{"severity":"P1","title":"Unresolved blocker","body":"This remains after remediation."}],"residual_risks":[]}' >"$output_file"
+  elif [[ "${FAKE_REVIEW_MODE:-clean}" == "remediate" && "$review_count" == "1" ]]; then
+    printf '%s\n' '{"findings":[{"severity":"P2","title":"Proof needs refresh","body":"Refresh proof after the implementation commit."}],"residual_risks":[]}' >"$output_file"
+  elif [[ "${FAKE_REVIEW_MODE:-clean}" == "p3" ]]; then
+    printf '%s\n' '{"findings":[{"severity":"P3","title":"Minor follow-up","body":"Keep this visible to reviewers."}],"residual_risks":["Manual verification remains."]}' >"$output_file"
+  else
+    printf '%s\n' '{"findings":[],"residual_risks":[]}' >"$output_file"
+  fi
+  printf '%s\n' "{\"type\":\"thread.started\",\"thread_id\":\"fake-review-${review_count}\"}"
+  printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":20,"output_tokens":10}}'
+  exit 0
+fi
+
+if [[ "$is_resume" == "true" ]]; then
+  printf '%s\n' "remediated" >>"$worktree/runner-result.txt"
+else
+  printf '%s\n' "implemented" >"$worktree/runner-result.txt"
+fi
+git -C "$worktree" add runner-result.txt
+if ! git -C "$worktree" diff --cached --quiet; then
+  git -C "$worktree" commit -m "test: fake issue delivery" >/dev/null 2>&1
+  git -C "$worktree" push -u origin HEAD >/dev/null 2>&1
+fi
+[[ -n "$output_file" ]] && printf '%s\n' 'fake primary complete' >"$output_file"
+printf '%s\n' '{"type":"thread.started","thread_id":"fake-primary-session"}'
+printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":50,"output_tokens":25}}'

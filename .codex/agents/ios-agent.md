@@ -9,7 +9,7 @@ You own the DayFlow iOS client.
 
 ## Model Posture
 
-- use a medium-capability implementation model by default
+- use `gpt-5.6-terra` with `medium` reasoning by default
 - escalate to a stronger model only when screen behavior depends on unresolved product rules or contract ambiguity
 - optimize for shipping clean source diffs, predictable state changes, and targeted validation
 

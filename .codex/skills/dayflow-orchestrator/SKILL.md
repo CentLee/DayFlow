@@ -18,9 +18,8 @@ Start here for any harness engineering, maintenance, or suspicious workflow beha
 
 Read and compare:
 
-- `WORKFLOW.md`
 - `docs/automation-model.md`
-- `docs/symphony-setup.md`
+- `docs/local-runner.md`
 - `docs/harness-engineering.md`
 - `.codex/agents/`
 - `.codex/skills/`
@@ -34,8 +33,8 @@ Classify the request:
 
 Check for drift across:
 
-- docs vs workflow prompt
-- workflow prompt vs scripts
+- docs vs local runner behavior
+- local runner behavior vs tests and CI
 - agent role definitions vs issue template expectations
 - skill instructions vs actual repository paths
 
@@ -76,9 +75,10 @@ If any of those are missing, block or clarify instead of expanding scope during 
 
 Match model strength to task leverage:
 
-- high-capability reasoning models for `product-agent`, `integration-agent`, and `review-agent`
-- medium-capability implementation models for `backend-agent` and `ios-agent`
+- `gpt-5.6-sol` with `high` reasoning for `product-agent`, `integration-agent`, and `review-agent`
+- `gpt-5.6-terra` with `medium` reasoning for `backend-agent` and `ios-agent`
 - escalate implementation work to a stronger model only when contracts, product rules, or risk analysis are still ambiguous
+- do not fall back implicitly when the configured model is rejected
 
 Do not spend top-tier model budget on deterministic or repetitive implementation work once the contract is stable.
 
@@ -106,6 +106,7 @@ When working on the harness itself:
 - push repetitive deterministic work into `scripts/`
 - keep local-only machine configuration out of git
 - use `scripts/audit_harness_drift.sh` when checking repo-level harness alignment
+- use `scripts/dayflow_runner.sh` for issue execution, status, and reconciliation
 
 ## Completion Standard
 

@@ -18,7 +18,10 @@ coverage.out
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
 
-# Local Symphony runtime state
+# Current local runner state
+.dayflow/
+
+# Legacy state retained only to protect and migrate CEN-28
 .symphony/
 
 # Local review / ad-hoc HTML artifacts

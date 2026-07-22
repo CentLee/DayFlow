@@ -1,0 +1,10 @@
+{
+  "id": "issue-30",
+  "identifier": "CEN-30",
+  "title": "Missing metadata",
+  "description": "Goal:\n- Incomplete issue.",
+  "state": {
+    "id": "state-todo",
+    "name": "Todo"
+  }
+}

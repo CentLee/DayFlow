@@ -1,6 +1,6 @@
 # DayFlow Iteration Queue
 
-This document defines the post-bootstrap issue queue that Symphony should consume.
+This document defines the post-bootstrap issue queue used for Linear intake and local runner execution.
 
 ## Operating Rule
 
@@ -15,25 +15,25 @@ This document defines the post-bootstrap issue queue that Symphony should consum
 - Title: `[Integration] define Linear issue template and ready criteria`
 - Primary Agent: `integration-agent`
 - Inputs:
-  - `WORKFLOW.md`
+  - `docs/local-runner.md`
   - `docs/automation-model.md`
 - Done When:
   - Linear issue body template is documented
   - ready criteria are documented
   - blocked criteria are documented
 - Out of Scope:
-  - Symphony server installation
+  - runner implementation
 
 ### OPS-2
 
-- Title: `[Integration] define Symphony state machine and pickup filter`
+- Title: `[Integration] define local runner state machine and admission filter`
 - Primary Agent: `integration-agent`
 - Inputs:
-  - `WORKFLOW.md`
+  - `docs/local-runner.md`
   - `docs/automation-model.md`
 - Done When:
   - state transitions are documented
-  - `Ready` pickup policy is documented
+  - `Todo` start and owned resume policies are documented
   - branch and workspace naming rules are documented
 - Out of Scope:
   - CI changes
@@ -43,7 +43,7 @@ This document defines the post-bootstrap issue queue that Symphony should consum
 - Title: `[Review] define PR review checklist and proof-of-work template`
 - Primary Agent: `review-agent`
 - Inputs:
-  - `WORKFLOW.md`
+  - `docs/local-runner.md`
   - `docs/review-checklist.md`
 - Done When:
   - review checklist is documented

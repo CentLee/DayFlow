@@ -12,12 +12,12 @@ This repository is designed for Codex-based agent execution.
 
 ## Team Workflow
 
-1. `dayflow-orchestrator` routes issue work to the smallest valid agent scope.
+1. `dayflow-orchestrator` routes issue work to the smallest valid agent scope and invokes the local runner.
 2. Global harness skills provide reusable orchestration patterns, while DayFlow agents apply those patterns to this domain.
 3. Product Agent writes or updates product-facing specs from user needs and the Excel-derived budget model.
 4. Backend, iOS, and Integration Agents implement against agreed contracts, usually as single-agent issues.
 5. Small vertical slices may use sequential handoff across agents when the contract is already stable.
-6. The primary agent owns an issue through review follow-up until the PR is merge-ready.
+6. The primary agent owns an issue through review follow-up until the PR is merge-ready; the orchestrator does not implement issue code.
 7. Review Agent validates every PR for simplicity, API consistency, privacy boundaries, and test coverage, but does not replace lifecycle ownership.
 
 ## Constraints
@@ -35,7 +35,7 @@ This repository is designed for Codex-based agent execution.
 - `docs/api-contract.md`
 - `docs/ios-architecture.md`
 - `docs/sync-model.md`
-- `docs/symphony-setup.md`
+- `docs/local-runner.md`
 - `docs/automation-model.md`
 - `docs/iteration-queue.md`
 - `docs/review-checklist.md`
