@@ -26,8 +26,12 @@ DAYFLOW_EXECUTION_LIMIT_SECONDS="${DAYFLOW_EXECUTION_LIMIT_SECONDS:-1200}"
 DAYFLOW_STALL_LIMIT_SECONDS="${DAYFLOW_STALL_LIMIT_SECONDS:-300}"
 DAYFLOW_TOKEN_LIMIT="${DAYFLOW_TOKEN_LIMIT:-120000}"
 DAYFLOW_MONITOR_INTERVAL_SECONDS="${DAYFLOW_MONITOR_INTERVAL_SECONDS:-2}"
+DAYFLOW_CI_POLL_INTERVAL_SECONDS="${DAYFLOW_CI_POLL_INTERVAL_SECONDS:-5}"
+DAYFLOW_CI_WAIT_TIMEOUT_SECONDS="${DAYFLOW_CI_WAIT_TIMEOUT_SECONDS:-600}"
 DAYFLOW_DEFAULT_SANDBOX="${DAYFLOW_DEFAULT_SANDBOX:-workspace-write}"
 DAYFLOW_DRY_RUN="${DAYFLOW_DRY_RUN:-false}"
+DAYFLOW_ACTIVE_CODEX_PID=""
+DAYFLOW_ACTIVE_CODEX_PGID=""
 
 dayflow_error() {
   printf 'dayflow-runner: %s\n' "$*" >&2
@@ -137,6 +141,27 @@ dayflow_migrate_legacy_runtime() {
     cp "$legacy_merge_ready" "$DAYFLOW_MERGE_READY_STORE"
   fi
   [[ -f "$DAYFLOW_MERGE_READY_STORE" ]] || printf '{}\n' >"$DAYFLOW_MERGE_READY_STORE"
+  dayflow_normalize_merge_ready_store
+}
+
+dayflow_normalize_merge_ready_store() {
+  local tmp_file="${DAYFLOW_MERGE_READY_STORE}.tmp.$$"
+  jq '
+    reduce to_entries[] as $entry ({};
+      if ($entry.key | test("^CEN-[0-9]+$")) then
+        .[$entry.key] = $entry.value
+      elif (($entry.value | type) == "object") and
+           ((($entry.value.issue_key // $entry.value.identifier // "") | test("^CEN-[0-9]+$"))) then
+        ($entry.value.issue_key // $entry.value.identifier) as $issue_key
+        | .[$issue_key] = ($entry.value + {
+          pr_number: ($entry.value.pr_number // ($entry.key | tonumber?))
+        })
+      else
+        .[$entry.key] = $entry.value
+      end
+    )
+  ' "$DAYFLOW_MERGE_READY_STORE" >"$tmp_file"
+  mv "$tmp_file" "$DAYFLOW_MERGE_READY_STORE"
 }
 
 dayflow_acquire_lock() {
@@ -176,8 +201,16 @@ dayflow_release_lock() {
 
 dayflow_exit_cleanup() {
   local status=$?
+  trap - EXIT INT TERM
+  dayflow_stop_active_codex
   dayflow_release_lock
   exit "$status"
+}
+
+dayflow_install_cleanup_traps() {
+  trap dayflow_exit_cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 }
 
 dayflow_linear_graphql() {
@@ -257,11 +290,11 @@ dayflow_notify() {
   local payload
   [[ "$DAYFLOW_DRY_RUN" == "false" ]] || return 0
   dayflow_load_notifications
-  [[ -n "${DAYFLOW_DISCORD_WEBHOOK_URL:-}" ]] || return 0
+  [[ -n "${DAYFLOW_DISCORD_WEBHOOK_URL:-}" ]] || return 1
   payload="$(jq -n --arg title "$title" --arg description "$body" --argjson color "$color" \
     '{embeds: [{title: $title, description: $description, color: $color}]}')"
   "$DAYFLOW_CURL_BIN" -fsS -X POST "$DAYFLOW_DISCORD_WEBHOOK_URL" \
-    -H 'Content-Type: application/json' --data "$payload" >/dev/null || true
+    -H 'Content-Type: application/json' --data "$payload" >/dev/null
 }
 
 dayflow_notify_state() {
@@ -275,7 +308,7 @@ dayflow_notify_state() {
     "$DAYFLOW_STATE_DONE_NAME") color=5763719 ;;
     "$DAYFLOW_STATE_BLOCKED_NAME") color=15158332 ;;
   esac
-  dayflow_notify "DayFlow ${issue_key} -> ${state_name}" "$detail" "$color"
+  dayflow_notify "DayFlow ${issue_key} -> ${state_name}" "$detail" "$color" || true
 }
 
 dayflow_extract_section() {
@@ -418,7 +451,10 @@ dayflow_prepare_new_worktree() {
 dayflow_validate_resume_state() {
   local issue_key="$1"
   local expected_branch="$2"
-  local state_file worktree branch session_id
+  local expected_agent="$3"
+  local expected_model="$4"
+  local expected_reasoning="$5"
+  local state_file worktree branch session_id persisted_agent persisted_model persisted_reasoning
   state_file="$(dayflow_state_file "$issue_key")"
   [[ -f "$state_file" ]] || {
     dayflow_error "$issue_key cannot resume without local state"
@@ -426,6 +462,9 @@ dayflow_validate_resume_state() {
   }
   worktree="$(jq -r '.worktree // ""' "$state_file")"
   session_id="$(jq -r '.session_id // ""' "$state_file")"
+  persisted_agent="$(jq -r '.primary_agent // ""' "$state_file")"
+  persisted_model="$(jq -r '.model // ""' "$state_file")"
+  persisted_reasoning="$(jq -r '.reasoning // ""' "$state_file")"
   [[ -n "$worktree" && -e "$worktree/.git" && -n "$session_id" ]] || {
     dayflow_error "$issue_key resume state lacks a valid worktree or session"
     return 1
@@ -433,6 +472,10 @@ dayflow_validate_resume_state() {
   branch="$(git -C "$worktree" branch --show-current)"
   [[ "$branch" == "$expected_branch" ]] || {
     dayflow_error "$issue_key resume branch mismatch: $branch"
+    return 1
+  }
+  [[ "$persisted_agent" == "$expected_agent" && "$persisted_model" == "$expected_model" && "$persisted_reasoning" == "$expected_reasoning" ]] || {
+    dayflow_error "$issue_key resume ownership metadata no longer matches Linear routing"
     return 1
   }
   printf '%s\n' "$worktree"
@@ -447,9 +490,12 @@ dayflow_jsonl_tokens() {
   jq -R -s '
     split("\n") | map(fromjson? // empty)
     | [ .[]
-      | select(.type == "turn.completed" or .type == "turn_complete")
-      | (.usage // .token_usage // {})
-      | ((.input_tokens // .inputTokens // 0) + (.output_tokens // .outputTokens // 0))
+      | (.usage // .token_usage // .response.usage // .event.usage // .item.usage // empty)
+      | (
+          .total_tokens // .totalTokens //
+          ((.input_tokens // .inputTokens // .prompt_tokens // .promptTokens // 0) +
+           (.output_tokens // .outputTokens // .completion_tokens // .completionTokens // 0))
+        )
     ] | add // 0
   ' "$log_file" 2>/dev/null || printf '0\n'
 }
@@ -459,19 +505,57 @@ dayflow_jsonl_session_id() {
   jq -R -sr 'split("\n") | map(fromjson? // empty) | [.[] | select(.type == "thread.started" or .type == "thread_started") | (.thread_id // .threadId // .id)] | map(select(. != null)) | first // empty' "$log_file" 2>/dev/null
 }
 
-dayflow_stop_child() {
+dayflow_descendant_pids() {
+  local parent_pid="$1"
+  local child_pid
+  while IFS= read -r child_pid; do
+    [[ "$child_pid" =~ ^[0-9]+$ ]] || continue
+    dayflow_descendant_pids "$child_pid"
+    printf '%s\n' "$child_pid"
+  done < <(pgrep -P "$parent_pid" 2>/dev/null || true)
+}
+
+dayflow_stop_process_tree() {
   local pid="$1"
-  kill -TERM "$pid" 2>/dev/null || true
-  pkill -TERM -P "$pid" 2>/dev/null || true
+  local runner_pgid target_pgid descendant
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+  kill -0 "$pid" 2>/dev/null || return 0
+
+  runner_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
+  target_pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')"
+  if [[ -n "$target_pgid" && "$target_pgid" != "$runner_pgid" ]]; then
+    kill -TERM -- "-$target_pgid" 2>/dev/null || true
+  else
+    while IFS= read -r descendant; do
+      kill -TERM "$descendant" 2>/dev/null || true
+    done < <(dayflow_descendant_pids "$pid")
+    kill -TERM "$pid" 2>/dev/null || true
+  fi
+
   local attempts=0
   while kill -0 "$pid" 2>/dev/null && (( attempts < 10 )); do
     sleep 0.2
     attempts=$((attempts + 1))
   done
   if kill -0 "$pid" 2>/dev/null; then
-    kill -KILL "$pid" 2>/dev/null || true
-    pkill -KILL -P "$pid" 2>/dev/null || true
+    if [[ -n "$target_pgid" && "$target_pgid" != "$runner_pgid" ]]; then
+      kill -KILL -- "-$target_pgid" 2>/dev/null || true
+    else
+      while IFS= read -r descendant; do
+        kill -KILL "$descendant" 2>/dev/null || true
+      done < <(dayflow_descendant_pids "$pid")
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
   fi
+}
+
+dayflow_stop_active_codex() {
+  local pid="${DAYFLOW_ACTIVE_CODEX_PID:-}"
+  if [[ -n "$pid" ]]; then
+    dayflow_stop_process_tree "$pid"
+  fi
+  DAYFLOW_ACTIVE_CODEX_PID=""
+  DAYFLOW_ACTIVE_CODEX_PGID=""
 }
 
 dayflow_codex_command() {
@@ -517,14 +601,29 @@ dayflow_execute_bounded() {
   local output_file="$9"
   local started_at now last_progress last_size=0 size elapsed invocation_tokens aggregate_tokens pid rc=0 limit_reason=""
 
+  aggregate_tokens="$(dayflow_state_value "$issue_key" '.tokens_used // 0' 2>/dev/null || printf '0')"
+  if (( aggregate_tokens >= DAYFLOW_TOKEN_LIMIT )); then
+    DAYFLOW_EXECUTION_ERROR="token limit reached before launch (${DAYFLOW_TOKEN_LIMIT})"
+    export DAYFLOW_EXECUTION_ERROR
+    return 124
+  fi
+
   : >"$log_file"
   started_at="$(date +%s)"
   last_progress="$started_at"
-  dayflow_codex_command "$mode" "$worktree" "$model" "$reasoning" "$session_id" "$prompt_file" "$output_file" >"$log_file" 2>&1 &
+  (
+    trap - EXIT INT TERM
+    dayflow_codex_command "$mode" "$worktree" "$model" "$reasoning" "$session_id" "$prompt_file" "$output_file"
+  ) >"$log_file" 2>&1 &
   pid=$!
+  DAYFLOW_ACTIVE_CODEX_PID="$pid"
+  DAYFLOW_ACTIVE_CODEX_PGID="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')"
 
   while kill -0 "$pid" 2>/dev/null; do
     sleep "$DAYFLOW_MONITOR_INTERVAL_SECONDS"
+    if ! kill -0 "$pid" 2>/dev/null; then
+      break
+    fi
     now="$(date +%s)"
     size="$(wc -c <"$log_file" | tr -d ' ')"
     if [[ "$size" != "$last_size" ]]; then
@@ -535,7 +634,7 @@ dayflow_execute_bounded() {
     elapsed=$((now - started_at))
     invocation_tokens="$(dayflow_jsonl_tokens "$log_file")"
     aggregate_tokens="$(dayflow_state_value "$issue_key" '.tokens_used // 0' 2>/dev/null || printf '0')"
-    if (( aggregate_tokens + invocation_tokens > DAYFLOW_TOKEN_LIMIT )); then
+    if (( aggregate_tokens + invocation_tokens >= DAYFLOW_TOKEN_LIMIT )); then
       limit_reason="token limit exceeded (${DAYFLOW_TOKEN_LIMIT})"
     elif (( now - last_progress >= DAYFLOW_STALL_LIMIT_SECONDS )); then
       limit_reason="no progress for ${DAYFLOW_STALL_LIMIT_SECONDS}s"
@@ -543,13 +642,15 @@ dayflow_execute_bounded() {
       limit_reason="execution limit exceeded (${DAYFLOW_EXECUTION_LIMIT_SECONDS}s)"
     fi
     if [[ -n "$limit_reason" ]]; then
-      dayflow_stop_child "$pid"
+      dayflow_stop_active_codex
       break
     fi
   done
 
   if [[ -z "$limit_reason" ]]; then
     if wait "$pid"; then rc=0; else rc=$?; fi
+    DAYFLOW_ACTIVE_CODEX_PID=""
+    DAYFLOW_ACTIVE_CODEX_PGID=""
   else
     wait "$pid" 2>/dev/null || true
     rc=124
@@ -562,6 +663,11 @@ dayflow_execute_bounded() {
     --argjson tokens "$aggregate_tokens" \
     --arg at "$(dayflow_now_iso)" \
     '.tokens_used = $tokens | .updated_at = $at'
+
+  if [[ -z "$limit_reason" && "$rc" == "0" ]] && (( aggregate_tokens >= DAYFLOW_TOKEN_LIMIT )); then
+    limit_reason="token limit exceeded after process exit (${DAYFLOW_TOKEN_LIMIT})"
+    rc=124
+  fi
 
   if [[ -n "$limit_reason" ]]; then
     DAYFLOW_EXECUTION_ERROR="$limit_reason"
@@ -600,7 +706,7 @@ dayflow_pr_for_branch() {
   local repo
   repo="$(dayflow_github_repo)"
   dayflow_gh pr list -R "$repo" --head "$branch" --state "$state" --limit 1 \
-    --json number,url,isDraft,state,headRefName,headRefOid,baseRefName,body
+    --json number,url,isDraft,state,headRefName,headRefOid,baseRefName,mergeStateStatus,body
 }
 
 dayflow_validate_proof() {
@@ -623,7 +729,7 @@ dayflow_validate_delivery() {
   local issue_key="$1"
   local branch="$2"
   local worktree="$3"
-  local current_branch commit_count remote_head prs pr_json body
+  local current_branch commit_count local_head remote_head remote_sha pr_head prs pr_json body
   current_branch="$(git -C "$worktree" branch --show-current)"
   [[ "$current_branch" == "$branch" ]] || {
     dayflow_error "delivery branch mismatch: $current_branch"
@@ -639,9 +745,16 @@ dayflow_validate_delivery() {
     dayflow_error 'delivery branch has not been pushed'
     return 1
   }
+  local_head="$(git -C "$worktree" rev-parse HEAD)"
+  remote_sha="$(awk 'NR == 1 {print $1}' <<<"$remote_head")"
   prs="$(dayflow_pr_for_branch "$branch" open)"
   pr_json="$(jq -ce '.[0] | select(.baseRefName == "develop")' <<<"$prs")" || {
     dayflow_error 'delivery has no open PR targeting develop'
+    return 1
+  }
+  pr_head="$(jq -r '.headRefOid // ""' <<<"$pr_json")"
+  [[ -n "$pr_head" && "$local_head" == "$remote_sha" && "$remote_sha" == "$pr_head" ]] || {
+    dayflow_error "delivery head mismatch: local=${local_head} remote=${remote_sha} pr=${pr_head}"
     return 1
   }
   body="$(jq -r '.body // ""' <<<"$pr_json")"
@@ -654,31 +767,82 @@ dayflow_review_has_blockers() {
   jq -e '[.findings[]? | select(.severity == "P0" or .severity == "P1" or .severity == "P2")] | length > 0' "$review_file" >/dev/null
 }
 
-dayflow_post_review_findings() {
+dayflow_publish_review_result() {
   local pr_number="$1"
   local review_file="$2"
   local comment_file="$3"
+  local review_round="$4"
+  local outcome="$5"
   local repo
   repo="$(dayflow_github_repo)"
   {
-    printf '## Automated review findings\n\n'
-    jq -r '.findings[] | "- **[\(.severity)] \(.title)**: \(.body)"' "$review_file"
-    printf '\nReview remediation is returning to the same primary-agent session.\n'
+    printf '## Automated review round %s\n\n' "$review_round"
+    printf '**Outcome:** %s\n\n' "$outcome"
+    if [[ "$(jq '.findings | length' "$review_file")" == "0" ]]; then
+      printf '### Findings\n\n- None.\n'
+    else
+      printf '### Findings\n\n'
+      jq -r '.findings[] | "- **[\(.severity)] \(.title)**: \(.body)"' "$review_file"
+    fi
+    printf '\n### Residual risks\n\n'
+    if [[ "$(jq '.residual_risks | length' "$review_file")" == "0" ]]; then
+      printf '%s\n' '- None.'
+    else
+      jq -r '.residual_risks[] | "- " + .' "$review_file"
+    fi
   } >"$comment_file"
   dayflow_gh pr comment -R "$repo" "$pr_number" --body-file "$comment_file" >/dev/null
 }
 
-dayflow_checks_green() {
+dayflow_check_status() {
   local pr_number="$1"
   local repo checks count
   repo="$(dayflow_github_repo)"
-  checks="$(dayflow_gh pr checks -R "$repo" "$pr_number" --json bucket,name,state 2>/dev/null)" || return 1
+  checks="$(dayflow_gh pr checks -R "$repo" "$pr_number" --json bucket,name,state 2>/dev/null)" || {
+    printf 'pending\n'
+    return 0
+  }
   count="$(jq 'length' <<<"$checks")"
   if (( count == 0 )); then
-    [[ "${DAYFLOW_ALLOW_NO_CHECKS:-false}" == "true" ]]
-    return
+    if [[ "${DAYFLOW_ALLOW_NO_CHECKS:-false}" == "true" ]]; then
+      printf 'pass\n'
+    else
+      printf 'pending\n'
+    fi
+  elif jq -e 'any(.[]; .bucket == "fail" or .bucket == "cancel")' >/dev/null <<<"$checks"; then
+    printf 'fail\n'
+  elif jq -e 'all(.[]; .bucket == "pass" or .bucket == "skipping")' >/dev/null <<<"$checks"; then
+    printf 'pass\n'
+  else
+    printf 'pending\n'
   fi
-  jq -e 'all(.[]; .bucket == "pass" or .bucket == "skipping")' >/dev/null <<<"$checks"
+}
+
+dayflow_checks_green() {
+  local pr_number="$1"
+  [[ "$(dayflow_check_status "$pr_number")" == "pass" ]]
+}
+
+dayflow_wait_for_ci() {
+  local pr_number="$1"
+  local started_at now check_status
+  started_at="$(date +%s)"
+  while true; do
+    check_status="$(dayflow_check_status "$pr_number")"
+    case "$check_status" in
+      pass) return 0 ;;
+      fail)
+        DAYFLOW_CI_WAIT_STATUS="failed"
+        return 1
+        ;;
+    esac
+    now="$(date +%s)"
+    if (( now - started_at >= DAYFLOW_CI_WAIT_TIMEOUT_SECONDS )); then
+      DAYFLOW_CI_WAIT_STATUS="timeout"
+      return 124
+    fi
+    sleep "$DAYFLOW_CI_POLL_INTERVAL_SECONDS"
+  done
 }
 
 dayflow_has_requested_changes() {
@@ -700,9 +864,9 @@ dayflow_record_merge_ready() {
   local pr_url="$3"
   local head_sha="$4"
   local existing tmp
-  existing="$(jq -r --arg key "$issue_key" '.[$key].head_sha // ""' "$DAYFLOW_MERGE_READY_STORE")"
+  existing="$(jq -r --arg key "$issue_key" --arg pr "$pr_number" '.[$key].head_sha? // .[$pr].head_sha? // ""' "$DAYFLOW_MERGE_READY_STORE")"
   [[ "$existing" != "$head_sha" ]] || return 0
-  dayflow_notify "DayFlow ${issue_key} merge-ready" "PR #${pr_number} is ready to merge.\n${pr_url}" 5763719
+  dayflow_notify "DayFlow ${issue_key} merge-ready" "PR #${pr_number} is ready to merge.\n${pr_url}" 5763719 || return 1
   tmp="${DAYFLOW_MERGE_READY_STORE}.tmp.$$"
   jq --arg key "$issue_key" --arg sha "$head_sha" --argjson pr "$pr_number" --arg at "$(dayflow_now_iso)" \
     '.[$key] = {head_sha: $sha, pr_number: $pr, notified_at: $at}' "$DAYFLOW_MERGE_READY_STORE" >"$tmp"
@@ -711,7 +875,8 @@ dayflow_record_merge_ready() {
 
 dayflow_reconcile_one() {
   local issue_key="$1"
-  local state_file issue_json issue_id branch prs pr_json pr_number pr_url head_sha is_draft pr_state current_state
+  local state_file issue_json issue_id branch prs pr_json pr_number pr_url head_sha reviewed_head_sha
+  local is_draft pr_state current_state base_branch head_branch merge_state
   state_file="$(dayflow_state_file "$issue_key")"
   [[ -f "$state_file" ]] || {
     dayflow_error "no local state for $issue_key"
@@ -730,6 +895,15 @@ dayflow_reconcile_one() {
   head_sha="$(jq -r '.headRefOid // ""' <<<"$pr_json")"
   is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
   pr_state="$(jq -r '.state' <<<"$pr_json")"
+  base_branch="$(jq -r '.baseRefName // ""' <<<"$pr_json")"
+  head_branch="$(jq -r '.headRefName // ""' <<<"$pr_json")"
+  merge_state="$(jq -r '.mergeStateStatus // "UNKNOWN"' <<<"$pr_json")"
+  reviewed_head_sha="$(jq -r '.reviewed_head_sha // ""' "$state_file")"
+
+  [[ "$base_branch" == "develop" && "$head_branch" == "$branch" ]] || {
+    dayflow_error "$issue_key PR is not the tracked develop delivery"
+    return 1
+  }
 
   if [[ "$pr_state" == "MERGED" ]]; then
     if [[ "$current_state" != "$DAYFLOW_STATE_DONE_NAME" ]]; then
@@ -749,6 +923,16 @@ dayflow_reconcile_one() {
     return 0
   fi
 
+  if [[ -z "$reviewed_head_sha" || "$head_sha" != "$reviewed_head_sha" ]]; then
+    if [[ "$is_draft" != "true" ]]; then
+      dayflow_gh pr ready -R "$(dayflow_github_repo)" --undo "$pr_number" >/dev/null
+    fi
+    [[ "$current_state" == "$DAYFLOW_STATE_IN_PROGRESS_NAME" ]] || dayflow_linear_set_state "$issue_id" "$DAYFLOW_STATE_IN_PROGRESS_NAME"
+    dayflow_state_update "$issue_key" --arg head "$head_sha" --arg at "$(dayflow_now_iso)" \
+      '.status = "review-required" | .unreviewed_head_sha = $head | .updated_at = $at'
+    return 0
+  fi
+
   if [[ "$is_draft" == "true" ]]; then
     [[ "$current_state" == "$DAYFLOW_STATE_IN_PROGRESS_NAME" ]] || dayflow_linear_set_state "$issue_id" "$DAYFLOW_STATE_IN_PROGRESS_NAME"
     return 0
@@ -757,9 +941,14 @@ dayflow_reconcile_one() {
   [[ "$current_state" == "$DAYFLOW_STATE_IN_REVIEW_NAME" ]] || dayflow_linear_set_state "$issue_id" "$DAYFLOW_STATE_IN_REVIEW_NAME"
   dayflow_state_update "$issue_key" --argjson pr "$pr_number" --arg url "$pr_url" --arg at "$(dayflow_now_iso)" \
     '.status = "in-review" | .pr_number = $pr | .pr_url = $url | .updated_at = $at'
-  if dayflow_checks_green "$pr_number"; then
-    dayflow_record_merge_ready "$issue_key" "$pr_number" "$pr_url" "$head_sha"
-    dayflow_state_update "$issue_key" --arg at "$(dayflow_now_iso)" '.status = "merge-ready" | .updated_at = $at'
+  if [[ "$merge_state" == "CLEAN" ]] && dayflow_checks_green "$pr_number"; then
+    if dayflow_record_merge_ready "$issue_key" "$pr_number" "$pr_url" "$head_sha"; then
+      dayflow_state_update "$issue_key" --arg at "$(dayflow_now_iso)" '.status = "merge-ready" | del(.last_error) | .updated_at = $at'
+    else
+      dayflow_state_update "$issue_key" --arg at "$(dayflow_now_iso)" \
+        '.status = "merge-ready-notification-failed" | .last_error = "merge-ready webhook delivery failed" | .updated_at = $at'
+      return 1
+    fi
   fi
 }
 
@@ -791,7 +980,7 @@ dayflow_run_issue() {
     case "$linear_state" in
       "$DAYFLOW_STATE_TODO_NAME") ;;
       "$DAYFLOW_STATE_IN_PROGRESS_NAME"|"$DAYFLOW_STATE_IN_REVIEW_NAME")
-        dayflow_validate_resume_state "$issue_key" "$branch" >/dev/null || return 1
+        dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" >/dev/null || return 1
         ;;
       *) dayflow_error "issue state is not runnable: $linear_state"; return 1 ;;
     esac
@@ -802,7 +991,7 @@ dayflow_run_issue() {
   fi
 
   dayflow_acquire_lock "$issue_key" || return 1
-  trap dayflow_exit_cleanup EXIT
+  dayflow_install_cleanup_traps
   case "$linear_state" in
     "$DAYFLOW_STATE_TODO_NAME")
       worktree="$(dayflow_prepare_new_worktree "$issue_key" "$branch")" || return 1
@@ -810,7 +999,7 @@ dayflow_run_issue() {
       mode="primary-new"
       ;;
     "$DAYFLOW_STATE_IN_PROGRESS_NAME"|"$DAYFLOW_STATE_IN_REVIEW_NAME")
-      worktree="$(dayflow_validate_resume_state "$issue_key" "$branch")" || return 1
+      worktree="$(dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning")" || return 1
       session_id="$(dayflow_state_value "$issue_key" '.session_id')"
       mode="primary-resume"
       ;;
@@ -825,7 +1014,13 @@ dayflow_run_issue() {
     --arg model "$model" --arg reasoning "$reasoning" --arg branch "$branch" --arg worktree "$worktree" \
     --arg at "$(dayflow_now_iso)" \
     '. + {issue: $issue, issue_id: $id, title: $title, primary_agent: $agent, model: $model, reasoning: $reasoning, branch: $branch, worktree: $worktree, status: "running", updated_at: $at, tokens_used: (.tokens_used // 0)}'
-  dayflow_linear_set_state "$issue_id" "$DAYFLOW_STATE_IN_PROGRESS_NAME"
+  if ! dayflow_linear_set_state "$issue_id" "$DAYFLOW_STATE_IN_PROGRESS_NAME"; then
+    dayflow_state_update "$issue_key" --arg at "$(dayflow_now_iso)" \
+      '.status = "pre-session-blocked" | .last_error = "Linear In Progress transition failed before Codex launch" | .updated_at = $at | del(.session_id)'
+    dayflow_linear_set_state "$issue_id" "$DAYFLOW_STATE_BLOCKED_NAME" || true
+    dayflow_notify_state "$issue_key" "$DAYFLOW_STATE_BLOCKED_NAME" "Linear In Progress transition failed before Codex launch; workspace preserved."
+    return 1
+  fi
   dayflow_notify_state "$issue_key" "$DAYFLOW_STATE_IN_PROGRESS_NAME" "Primary agent ${primary} started with ${model}/${reasoning}."
 
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -865,7 +1060,15 @@ dayflow_run_issue() {
       dayflow_block_issue "$issue_json" 'Review agent returned invalid structured output.'
       return 1
     }
-    if ! dayflow_review_has_blockers "$review_output"; then
+    findings_comment="$DAYFLOW_LOG_ROOT/${issue_key}-${timestamp}-review-${review_round}.md"
+    if dayflow_review_has_blockers "$review_output"; then
+      if [[ "$(jq -r '.isDraft' <<<"$pr_json")" != "true" ]]; then
+        dayflow_gh pr ready -R "$(dayflow_github_repo)" --undo "$pr_number" >/dev/null
+        pr_json="$(jq '.isDraft = true' <<<"$pr_json")"
+      fi
+      dayflow_publish_review_result "$pr_number" "$review_output" "$findings_comment" "$review_round" "blocking findings"
+    else
+      dayflow_publish_review_result "$pr_number" "$review_output" "$findings_comment" "$review_round" "passed"
       break
     fi
     if (( review_round == 2 )); then
@@ -873,8 +1076,6 @@ dayflow_run_issue() {
       return 1
     fi
 
-    findings_comment="$DAYFLOW_LOG_ROOT/${issue_key}-${timestamp}-review-findings.md"
-    dayflow_post_review_findings "$pr_number" "$review_output" "$findings_comment"
     remediation_prompt="$DAYFLOW_LOG_ROOT/${issue_key}-${timestamp}-remediation.prompt"
     remediation_log="$DAYFLOW_LOG_ROOT/${issue_key}-${timestamp}-remediation.jsonl"
     remediation_output="$DAYFLOW_LOG_ROOT/${issue_key}-${timestamp}-remediation.out"
@@ -893,6 +1094,12 @@ dayflow_run_issue() {
     review_round=$((review_round + 1))
   done
 
+  pr_json="$(dayflow_validate_delivery "$issue_key" "$branch" "$worktree")" || {
+    dayflow_block_issue "$issue_json" 'Delivery head changed after automated review; rereview required.'
+    return 1
+  }
+  dayflow_state_update "$issue_key" --arg head "$(jq -r '.headRefOid' <<<"$pr_json")" --arg at "$(dayflow_now_iso)" \
+    '.reviewed_head_sha = $head | del(.unreviewed_head_sha) | .updated_at = $at'
   repo="$(dayflow_github_repo)"
   if [[ "$(jq -r '.isDraft' <<<"$pr_json")" == "true" ]]; then
     dayflow_gh pr ready -R "$repo" "$pr_number" >/dev/null
@@ -901,7 +1108,20 @@ dayflow_run_issue() {
   dayflow_notify_state "$issue_key" "$DAYFLOW_STATE_IN_REVIEW_NAME" "PR #${pr_number} passed automated review."
   dayflow_state_update "$issue_key" --argjson pr "$pr_number" --arg url "$(jq -r '.url' <<<"$pr_json")" --arg at "$(dayflow_now_iso)" \
     '.status = "in-review" | .pr_number = $pr | .pr_url = $url | .updated_at = $at'
-  dayflow_reconcile_one "$issue_key"
+  if dayflow_wait_for_ci "$pr_number"; then
+    dayflow_reconcile_one "$issue_key"
+  else
+    case "${DAYFLOW_CI_WAIT_STATUS:-timeout}" in
+      failed)
+        dayflow_state_update "$issue_key" --arg at "$(dayflow_now_iso)" \
+          '.status = "in-review-ci-failed" | .last_error = "CI checks failed after PR became ready" | .updated_at = $at'
+        ;;
+      *)
+        dayflow_state_update "$issue_key" --arg at "$(dayflow_now_iso)" \
+          '.status = "in-review-ci-timeout" | .last_error = "CI wait timed out; run reconcile after checks complete" | .updated_at = $at'
+        ;;
+    esac
+  fi
 }
 
 dayflow_status_issue() {
@@ -923,16 +1143,25 @@ dayflow_status_issue() {
 
 dayflow_reconcile() {
   local issue_key="${1:-}"
-  local state_file
+  local state_file target rc=0
   if [[ -n "$issue_key" ]]; then
     dayflow_validate_issue_key "$issue_key" || return 2
-    dayflow_reconcile_one "$issue_key"
-    return
+    dayflow_acquire_lock "$issue_key" || return 1
+    if dayflow_reconcile_one "$issue_key"; then rc=0; else rc=$?; fi
+    dayflow_release_lock
+    return "$rc"
   fi
   for state_file in "$DAYFLOW_STATE_ROOT"/CEN-*.json; do
     [[ -f "$state_file" ]] || continue
-    dayflow_reconcile_one "$(basename "$state_file" .json)"
+    target="$(basename "$state_file" .json)"
+    if ! dayflow_acquire_lock "$target"; then
+      rc=1
+      continue
+    fi
+    if ! dayflow_reconcile_one "$target"; then rc=1; fi
+    dayflow_release_lock
   done
+  return "$rc"
 }
 
 dayflow_usage() {
@@ -961,14 +1190,12 @@ dayflow_runner_main() {
   [[ $# -le 1 ]] || { dayflow_usage; return 2; }
 
   dayflow_require_commands bash git jq sed awk "$DAYFLOW_CURL_BIN" || return 1
-  if [[ "$DAYFLOW_DRY_RUN" == "false" ]]; then
-    dayflow_initialize_runtime
-  fi
 
   case "$command_name" in
     run)
       [[ -n "$issue_key" ]] || { dayflow_usage; return 2; }
       if [[ "$DAYFLOW_DRY_RUN" == "false" ]]; then
+        dayflow_initialize_runtime
         dayflow_require_commands "$DAYFLOW_CODEX_BIN" "$DAYFLOW_GH_BIN" rg || return 1
       fi
       dayflow_run_issue "$issue_key"
@@ -978,6 +1205,9 @@ dayflow_runner_main() {
       dayflow_status_issue "$issue_key"
       ;;
     reconcile)
+      if [[ "$DAYFLOW_DRY_RUN" == "false" ]]; then
+        dayflow_initialize_runtime
+      fi
       dayflow_require_commands "$DAYFLOW_GH_BIN" || return 1
       dayflow_reconcile "$issue_key"
       ;;

@@ -45,7 +45,7 @@ Each issue has a 120,000 aggregate token ceiling. Each Codex invocation stops af
 
 The Primary Agent must leave a pushed branch, at least one commit beyond `origin/develop`, an open PR targeting `develop`, and non-empty proof sections. The runner then invokes `review-agent` with `gpt-5.6-sol/high`. P0-P2 findings are posted to the PR and returned once to the same Primary Agent session. A second blocking review result blocks the issue.
 
-After review passes, the PR is marked ready and Linear moves to `In Review`. Green checks trigger one merge-ready notification per head SHA. A later `reconcile` moves merged work to `Done`.
+After review passes, the runner persists the reviewed head SHA, marks the PR ready, and moves Linear to `In Review`. It then waits for CI with a bounded, model-free polling interval and invokes reconciliation when checks turn green. A timeout leaves the issue safely in review for a later `reconcile` call. Merge-ready requires the current PR head to match the reviewed SHA, a `develop` base, a clean merge state, and green checks; any later push returns the PR to draft and requires review again. A merged PR moves to `Done` only when it still targets `develop` and matches the tracked branch.
 
 ## Local Configuration Migration
 

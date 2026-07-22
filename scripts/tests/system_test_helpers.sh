@@ -33,6 +33,7 @@ dayflow_export_fake_environment() {
   export DAYFLOW_WORKTREE_ROOT="$DAYFLOW_RUNTIME_DIR/worktrees"
   export DAYFLOW_STATE_ROOT="$DAYFLOW_RUNTIME_DIR/state"
   export DAYFLOW_LOG_ROOT="$DAYFLOW_RUNTIME_DIR/logs"
+  export DAYFLOW_MERGE_READY_STORE="$DAYFLOW_STATE_ROOT/merge-ready.json"
   export DAYFLOW_LEGACY_RUNTIME_DIR="$test_root/legacy"
   export DAYFLOW_CODEX_BIN="$source_root/scripts/tests/fakes/codex"
   export DAYFLOW_GH_BIN="$source_root/scripts/tests/fakes/gh"
@@ -46,12 +47,20 @@ dayflow_export_fake_environment() {
   export DAYFLOW_MONITOR_INTERVAL_SECONDS=0.1
   export DAYFLOW_EXECUTION_LIMIT_SECONDS=10
   export DAYFLOW_STALL_LIMIT_SECONDS=5
+  export DAYFLOW_CI_POLL_INTERVAL_SECONDS=0.1
+  export DAYFLOW_CI_WAIT_TIMEOUT_SECONDS=3
   export LINEAR_API_KEY='test-linear-key'
   export FAKE_CODEX_LOG="$test_root/codex.log"
   export FAKE_CODEX_REVIEW_COUNT_FILE="$test_root/review-count"
   export FAKE_GH_LOG="$test_root/gh.log"
   export FAKE_GH_READY_FILE="$test_root/gh-ready"
   export FAKE_CURL_LOG="$test_root/curl.log"
+  export FAKE_GH_COMMENTS_LOG="$test_root/comments.log"
+  export FAKE_GIT_ROOT="$seed"
+  export FAKE_PR_BRANCH='feature/tasks-29-replace-symphony-with-dayflow-local-runner'
+  unset FAKE_CODEX_INVOCATION_COUNT_FILE FAKE_CODEX_PARENT_PID_FILE FAKE_CODEX_CHILD_PID_FILE
+  unset FAKE_GH_HEAD_SHA_OVERRIDE FAKE_GH_BASE_BRANCH FAKE_GH_MERGE_STATE FAKE_GH_CHECK_MODE FAKE_GH_PENDING_COUNT_FILE
+  unset FAKE_LINEAR_FAIL_STATE FAKE_WEBHOOK_FAILURES_FILE FAKE_WEBHOOK_DELAY_SECONDS FAKE_GH_PR_STATE
 }
 
 dayflow_prepare_notification_fixture() {
