@@ -530,7 +530,9 @@ run_owned_recovery_gate_case() {
   rm -rf "$test_root"
 }
 
-if [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "owned-recovery-gates" ]]; then
+if [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "locks" ]]; then
+  run_webhook_retry_and_lock_test
+elif [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "owned-recovery-gates" ]]; then
   run_owned_recovery_gate_case publication-retry preflight
   run_owned_recovery_gate_case publication-retry linear
   run_owned_recovery_gate_case review-changes preflight

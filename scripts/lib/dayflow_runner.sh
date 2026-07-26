@@ -30,6 +30,7 @@ DAYFLOW_STATE_BLOCKED_NAME="${DAYFLOW_STATE_BLOCKED_NAME:-Blocked}"
 DAYFLOW_CODEX_BIN="${DAYFLOW_CODEX_BIN:-codex}"
 DAYFLOW_GH_BIN="${DAYFLOW_GH_BIN:-gh}"
 DAYFLOW_CURL_BIN="${DAYFLOW_CURL_BIN:-curl}"
+DAYFLOW_PERL_BIN="${DAYFLOW_PERL_BIN:-perl}"
 DAYFLOW_EXECUTION_LIMIT_SECONDS="${DAYFLOW_EXECUTION_LIMIT_SECONDS:-1200}"
 DAYFLOW_STALL_LIMIT_SECONDS="${DAYFLOW_STALL_LIMIT_SECONDS:-300}"
 DAYFLOW_TOKEN_LIMIT="${DAYFLOW_TOKEN_LIMIT:-120000}"
@@ -43,7 +44,10 @@ DAYFLOW_DEFAULT_SANDBOX="${DAYFLOW_DEFAULT_SANDBOX:-workspace-write}"
 DAYFLOW_DRY_RUN="${DAYFLOW_DRY_RUN:-false}"
 DAYFLOW_ACTIVE_CODEX_PID=""
 DAYFLOW_ACTIVE_CODEX_PGID=""
-DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR=""
+DAYFLOW_ACTIVE_MERGE_READY_LOCK_TOKEN=""
+DAYFLOW_ACTIVE_MERGE_READY_LOCK_PID=""
+DAYFLOW_ACTIVE_MERGE_READY_LOCK_IDENTITY=""
+DAYFLOW_CURRENT_BASH_PID=""
 
 dayflow_error() {
   printf 'dayflow-runner: %s\n' "$*" >&2
@@ -242,26 +246,121 @@ dayflow_release_lock() {
   DAYFLOW_ACTIVE_LOCK_DIR=""
 }
 
+dayflow_capture_current_bash_pid() {
+  local captured_pid="" capture_file
+
+  capture_file="$(mktemp "${TMPDIR:-/tmp}/dayflow-shell-pid.XXXXXX")" || return 1
+  if ! "$DAYFLOW_PERL_BIN" -e 'print getppid, "\n"' >"$capture_file"; then
+    rm -f "$capture_file"
+    return 1
+  fi
+  IFS= read -r captured_pid <"$capture_file" || true
+  rm -f "$capture_file"
+  [[ "$captured_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  DAYFLOW_CURRENT_BASH_PID="$captured_pid"
+}
+
+dayflow_shared_lock_transaction() {
+  local operation="$1"
+  local token="$2"
+  local owner_pid="$3"
+  local owner_identity="$4"
+  local lease_file="$DAYFLOW_STATE_ROOT/merge-ready.lock"
+  local mutex_file="$DAYFLOW_STATE_ROOT/merge-ready.lock.mutex"
+
+  "$DAYFLOW_PERL_BIN" - "$operation" "$mutex_file" "$lease_file" "$token" "$owner_pid" "$owner_identity" <<'PERL'
+use strict;
+use warnings;
+use Fcntl qw(:DEFAULT :flock);
+
+my ($operation, $mutex_file, $lease_file, $token, $owner_pid, $owner_identity) = @ARGV;
+open my $mutex, '>>', $mutex_file or exit 2;
+flock($mutex, LOCK_EX | LOCK_NB) or exit 1;
+my $temp_file = "$lease_file.tmp";
+if (-e $temp_file || -l $temp_file) {
+  unlink $temp_file or exit 2;
+}
+
+sub read_lease {
+  my ($path) = @_;
+  open my $fh, '<', $path or return;
+  my @values = <$fh>;
+  close $fh;
+  return unless @values == 3;
+  for my $value (@values) {
+    $value =~ s/\r?\n\z//;
+    return unless length $value;
+  }
+  return @values;
+}
+
+sub process_identity_matches {
+  my ($pid, $identity) = @_;
+  return 0 unless $pid =~ /\A[0-9]+\z/ && length $identity;
+  open my $ps, '-|', 'ps', '-o', 'lstart=', '-p', $pid or return 0;
+  my $actual = <$ps> // '';
+  close $ps;
+  $actual =~ s/^\s+|\s+$//g;
+  $actual =~ s/\s+/ /g;
+  return $actual eq $identity;
+}
+
+sub publish_lease {
+  my ($path, $temp, $token_value, $pid_value, $identity_value) = @_;
+  sysopen my $fh, $temp, O_WRONLY | O_CREAT | O_EXCL, 0600 or return 0;
+  my $written = print {$fh} "$token_value\n$pid_value\n$identity_value\n";
+  my $closed = close $fh;
+  unless ($written && $closed && rename $temp, $path) {
+    unlink $temp;
+    return 0;
+  }
+  my @published = read_lease($path);
+  return @published == 3 && $published[0] eq $token_value &&
+    $published[1] eq $pid_value && $published[2] eq $identity_value;
+}
+
+if ($operation eq 'acquire') {
+  if (-e $lease_file) {
+    exit 2 unless -f $lease_file;
+    my @existing = read_lease($lease_file);
+    exit 1 if @existing == 3 && process_identity_matches($existing[1], $existing[2]);
+  }
+  exit(publish_lease($lease_file, $temp_file, $token, $owner_pid, $owner_identity) ? 0 : 2);
+}
+
+if ($operation eq 'release') {
+  exit 0 unless -f $lease_file;
+  my @existing = read_lease($lease_file);
+  exit 0 unless @existing == 3 && $existing[0] eq $token &&
+    $existing[1] eq $owner_pid && $existing[2] eq $owner_identity;
+  exit(unlink($lease_file) ? 0 : 2);
+}
+
+exit 2;
+PERL
+}
+
 dayflow_acquire_merge_ready_lock() {
-  local lock_dir="$DAYFLOW_STATE_ROOT/merge-ready.lock"
-  local existing_pid="" existing_identity="" attempt
+  local attempt token identity owner_pid
+
+  dayflow_capture_current_bash_pid || {
+    dayflow_error 'unable to determine merge-ready lock owner PID'
+    return 1
+  }
+  owner_pid="$DAYFLOW_CURRENT_BASH_PID"
+  identity="$(dayflow_process_start_identity "$owner_pid")"
+  [[ -n "$identity" ]] || {
+    dayflow_error 'unable to determine merge-ready lock owner identity'
+    return 1
+  }
+  token="$owner_pid-${RANDOM}-$(date +%s)"
 
   for ((attempt = 0; attempt < DAYFLOW_SHARED_LOCK_ATTEMPTS; attempt++)); do
-    existing_pid=""
-    if mkdir "$lock_dir" 2>/dev/null; then
-      printf '%s\n' "$$" >"$lock_dir/pid"
-      dayflow_process_start_identity "$$" >"$lock_dir/process-start"
-      DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR="$lock_dir"
+    if dayflow_shared_lock_transaction acquire "$token" "$owner_pid" "$identity"; then
+      DAYFLOW_ACTIVE_MERGE_READY_LOCK_TOKEN="$token"
+      DAYFLOW_ACTIVE_MERGE_READY_LOCK_PID="$owner_pid"
+      DAYFLOW_ACTIVE_MERGE_READY_LOCK_IDENTITY="$identity"
       return 0
-    fi
-
-    [[ -f "$lock_dir/pid" ]] && existing_pid="$(<"$lock_dir/pid")"
-    [[ -f "$lock_dir/process-start" ]] && existing_identity="$(<"$lock_dir/process-start")"
-    if ! dayflow_pid_identity_matches "$existing_pid" "$existing_identity"; then
-      rm -f "$lock_dir/pid" "$lock_dir/process-start"
-      rmdir "$lock_dir" 2>/dev/null || true
-      existing_pid=""
-      continue
     fi
     sleep 0.1
   done
@@ -271,11 +370,21 @@ dayflow_acquire_merge_ready_lock() {
 }
 
 dayflow_release_merge_ready_lock() {
-  if [[ -n "${DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR:-}" && -d "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR" ]]; then
-    rm -f "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR/pid" "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR/process-start"
-    rmdir "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR" 2>/dev/null || true
+  local attempt
+  if [[ -n "${DAYFLOW_ACTIVE_MERGE_READY_LOCK_TOKEN:-}" ]]; then
+    for ((attempt = 0; attempt < DAYFLOW_SHARED_LOCK_ATTEMPTS; attempt++)); do
+      if dayflow_shared_lock_transaction release \
+        "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_TOKEN" \
+        "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_PID" \
+        "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_IDENTITY"; then
+        break
+      fi
+      sleep 0.1
+    done
   fi
-  DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR=""
+  DAYFLOW_ACTIVE_MERGE_READY_LOCK_TOKEN=""
+  DAYFLOW_ACTIVE_MERGE_READY_LOCK_PID=""
+  DAYFLOW_ACTIVE_MERGE_READY_LOCK_IDENTITY=""
 }
 
 dayflow_exit_cleanup() {
@@ -1847,7 +1956,7 @@ dayflow_runner_main() {
   issue_key="${1:-}"
   [[ $# -le 1 ]] || { dayflow_usage; return 2; }
 
-  dayflow_require_commands bash git jq sed awk "$DAYFLOW_CURL_BIN" || return 1
+  dayflow_require_commands bash git jq sed awk mktemp "$DAYFLOW_CURL_BIN" "$DAYFLOW_PERL_BIN" || return 1
 
   case "$command_name" in
     run)

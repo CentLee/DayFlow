@@ -56,6 +56,134 @@ assert_success 'first lock acquisition' dayflow_acquire_lock CEN-29
 assert_failure 'second lock acquisition must fail' dayflow_acquire_lock CEN-29
 dayflow_release_lock
 
+original_shared_lock_attempts="$DAYFLOW_SHARED_LOCK_ATTEMPTS"
+DAYFLOW_SHARED_LOCK_ATTEMPTS=2
+printf '%s\n' orphan >"$DAYFLOW_STATE_ROOT/merge-ready.lock.tmp"
+assert_success 'orphan temp does not block shared lease acquisition' dayflow_acquire_merge_ready_lock
+assert_failure 'locked transaction removes pre-existing orphan temp' test -e "$DAYFLOW_STATE_ROOT/merge-ready.lock.tmp"
+assert_eq "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_PID" "$(sed -n '2p' "$DAYFLOW_STATE_ROOT/merge-ready.lock")" 'lease records current Bash process PID'
+assert_eq "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_IDENTITY" "$(sed -n '3p' "$DAYFLOW_STATE_ROOT/merge-ready.lock")" 'lease records process-start identity'
+assert_eq '3' "$(wc -l <"$DAYFLOW_STATE_ROOT/merge-ready.lock" | tr -d ' ')" 'lease metadata is complete'
+assert_failure 'live shared lease is busy' dayflow_acquire_merge_ready_lock
+dayflow_release_merge_ready_lock
+assert_failure 'exact owner release removes shared lease' test -e "$DAYFLOW_STATE_ROOT/merge-ready.lock"
+DAYFLOW_SHARED_LOCK_ATTEMPTS="$original_shared_lock_attempts"
+
+flock_ready="$TEST_TMP/flock-ready"
+"$DAYFLOW_PERL_BIN" -MFcntl=:flock -e '
+  open my $fh, ">>", $ARGV[0] or die;
+  flock($fh, LOCK_EX) or die;
+  open my $ready, ">", $ARGV[1] or die;
+  close $ready;
+  kill "STOP", $$;
+  pause;
+' "$DAYFLOW_STATE_ROOT/merge-ready.lock.mutex" "$flock_ready" &
+flock_holder_pid=$!
+for _ in $(seq 1 100); do
+  [[ -f "$flock_ready" ]] && break
+  sleep 0.01
+done
+assert_success 'real Perl process holds kernel flock' test -f "$flock_ready"
+DAYFLOW_SHARED_LOCK_ATTEMPTS=2
+assert_failure 'nonblocking flock contention fails within bounded retries' dayflow_acquire_merge_ready_lock
+kill -KILL "$flock_holder_pid"
+wait "$flock_holder_pid" 2>/dev/null || true
+assert_success 'SIGKILL releases kernel flock for next acquisition' dayflow_acquire_merge_ready_lock
+dayflow_release_merge_ready_lock
+DAYFLOW_SHARED_LOCK_ATTEMPTS="$original_shared_lock_attempts"
+
+printf '%s\n%s\n%s\n' stale-owner 1 invalid >"$DAYFLOW_STATE_ROOT/merge-ready.lock"
+race_hold="$TEST_TMP/race-hold"
+for label in one two; do
+  bash -c '
+    source "$1"
+    DAYFLOW_SHARED_LOCK_ATTEMPTS=3
+    if dayflow_acquire_merge_ready_lock; then
+      printf "acquired|%s\n" "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_TOKEN" >"$2"
+      while [[ ! -e "$3" ]]; do sleep 0.01; done
+      dayflow_release_merge_ready_lock
+    else
+      printf "failed\n" >"$2"
+    fi
+  ' _ "$ROOT_DIR/scripts/lib/dayflow_runner.sh" "$TEST_TMP/reclaimer-$label" "$race_hold" &
+  if [[ "$label" == one ]]; then
+    reclaimer_one_pid=$!
+  else
+    reclaimer_two_pid=$!
+  fi
+done
+for _ in $(seq 1 100); do
+  [[ -f "$TEST_TMP/reclaimer-one" && -f "$TEST_TMP/reclaimer-two" ]] && break
+  sleep 0.01
+done
+assert_success 'both concurrent stale reclaimers reach deterministic result' \
+  test -f "$TEST_TMP/reclaimer-one" -a -f "$TEST_TMP/reclaimer-two"
+reclaim_result_count="$(rg --no-filename '^(acquired|failed)' "$TEST_TMP/reclaimer-one" "$TEST_TMP/reclaimer-two" | sort | uniq -c | tr -s ' ')"
+assert_success 'concurrent stale reclaim has one winner' grep -q ' 1 acquired' <<<"$reclaim_result_count"
+assert_success 'concurrent stale reclaim has one bounded loser' grep -q ' 1 failed' <<<"$reclaim_result_count"
+touch "$race_hold"
+wait "$reclaimer_one_pid"
+wait "$reclaimer_two_pid"
+
+dayflow_capture_current_bash_pid
+current_owner_pid="$DAYFLOW_CURRENT_BASH_PID"
+current_owner_identity="$(dayflow_process_start_identity "$current_owner_pid")"
+assert_success 'old owner lease fixture acquisition' \
+  dayflow_shared_lock_transaction acquire old-owner "$current_owner_pid" "$current_owner_identity"
+assert_success 'exact old owner release' \
+  dayflow_shared_lock_transaction release old-owner "$current_owner_pid" "$current_owner_identity"
+assert_success 'replacement lease acquisition' \
+  dayflow_shared_lock_transaction acquire replacement-owner "$current_owner_pid" "$current_owner_identity"
+assert_success 'old release transaction returns safely' \
+  dayflow_shared_lock_transaction release old-owner "$current_owner_pid" "$current_owner_identity"
+assert_eq 'replacement-owner' "$(sed -n '1p' "$DAYFLOW_STATE_ROOT/merge-ready.lock")" 'old release cannot delete replacement lease'
+assert_success 'replacement exact release' \
+  dayflow_shared_lock_transaction release replacement-owner "$current_owner_pid" "$current_owner_identity"
+
+dayflow_capture_current_bash_pid
+parent_shell_pid="$DAYFLOW_CURRENT_BASH_PID"
+bash32_owner_ready="$TEST_TMP/bash32-owner-ready"
+(
+  DAYFLOW_SHARED_LOCK_ATTEMPTS=2
+  if dayflow_acquire_merge_ready_lock; then
+    printf '%s|%s\n' \
+      "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_PID" \
+      "$(sed -n '2p' "$DAYFLOW_STATE_ROOT/merge-ready.lock")" \
+      >"$bash32_owner_ready"
+    while true; do sleep 1; done
+  fi
+) &
+bash32_owner_job=$!
+for _ in $(seq 1 100); do
+  [[ -f "$bash32_owner_ready" ]] && break
+  sleep 0.01
+done
+assert_success 'background Bash subshell publishes its actual owner PID' test -f "$bash32_owner_ready"
+bash32_owner_pid="$(cut -d '|' -f 1 "$bash32_owner_ready")"
+bash32_lease_pid="$(cut -d '|' -f 2 "$bash32_owner_ready")"
+assert_eq "$bash32_owner_job" "$bash32_owner_pid" 'captured PID is the background Bash subshell'
+assert_eq "$bash32_owner_pid" "$bash32_lease_pid" 'lease records the background Bash subshell PID'
+assert_failure 'background Bash subshell PID differs from live parent' test "$bash32_owner_pid" = "$parent_shell_pid"
+kill -KILL "$bash32_owner_pid"
+wait "$bash32_owner_job" 2>/dev/null || true
+assert_success 'parent Bash remains live after subshell SIGKILL' kill -0 "$parent_shell_pid"
+assert_success 'stale Bash 3.2 subshell lease is reclaimable' dayflow_acquire_merge_ready_lock
+dayflow_release_merge_ready_lock
+
+if (( BASH_VERSINFO[0] >= 4 )); then
+  bash_pid_result="$TEST_TMP/bash-pid-result"
+  (
+    dayflow_acquire_merge_ready_lock
+    printf '%s|%s|%s\n' "$$" "$BASHPID" "$(sed -n '2p' "$DAYFLOW_STATE_ROOT/merge-ready.lock")" >"$bash_pid_result"
+    dayflow_release_merge_ready_lock
+  )
+  shell_dollar_pid="$(cut -d '|' -f 1 "$bash_pid_result")"
+  shell_bash_pid="$(cut -d '|' -f 2 "$bash_pid_result")"
+  lease_bash_pid="$(cut -d '|' -f 3 "$bash_pid_result")"
+  assert_failure 'Bash 5 subshell BASHPID differs from inherited dollar PID' test "$shell_dollar_pid" = "$shell_bash_pid"
+  assert_eq "$shell_bash_pid" "$lease_bash_pid" 'Bash 5 lease consistently records BASHPID'
+fi
+
 usage_log="$TEST_TMP/usage.jsonl"
 cat >"$usage_log" <<'EOF'
 {"usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10}}
