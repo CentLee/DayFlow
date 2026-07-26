@@ -2,7 +2,7 @@
 
 ## Summary
 
-DayFlow uses a command-driven, single-issue delivery lane. `scripts/dayflow_runner.sh` performs deterministic Linear, Git, GitHub, proof, review, and notification checks around a bounded Codex execution. It runs once and exits.
+DayFlow uses a command-driven delivery lane. `scripts/dayflow_runner.sh` performs deterministic Linear, Git, GitHub, proof, review, and notification checks around one bounded issue execution. `scripts/dayflow_supervisor.sh once` is a dependency-aware outer cycle that reconciles, cleans up, selects, dispatches through the runner, and exits. Supported `launchd` scheduling repeats that one-shot command using a canonical, mode-0600 runtime environment file; no Symphony service, HTTP control plane, or port 4100 is involved.
 
 Automatic behavior:
 
@@ -14,6 +14,7 @@ Automatic behavior:
 - PR-to-Linear reconciliation
 - merged-PR lifecycle closure in GitHub Actions
 - deduplicated Discord notifications
+- dependency-aware `Todo` pickup and guarded post-merge cleanup
 
 Manual behavior:
 
@@ -22,6 +23,7 @@ Manual behavior:
 - secret provisioning
 - blocked issue recovery
 - PR merge approval
+- blocked or unsafe stale-claim recovery
 
 ## Ownership and States
 
@@ -34,6 +36,16 @@ One Primary Agent owns an issue through review follow-up. The orchestrator selec
 - `Done`: the develop-targeted PR was merged.
 
 The lifecycle is `Todo -> In Progress -> In Review -> merge-ready -> Done`. `reconcile` owns PR-driven state changes; the model never mutates lifecycle state directly.
+
+## Supervisor Queue Contract
+
+Each cycle first acquires a singleton PID lock, reconciles dead claims, runs the runner's all-issue reconciliation, and cleans safely completed worktrees. It then reads a fresh bounded Linear snapshot and rejects missing dependency state, stale data, result truncation, or a cycle in the active blocks graph.
+
+An issue is queue-eligible only when it is `Todo` and every blocker is `Done`. Eligible issues sort by ascending Linear priority, treating unset priority as last, then ascending issue number. Sequential dispatch is the default. The only parallel mode is an explicit maximum of two, and both active issues must declare `Parallel Safe: yes`, non-empty `Write Scope` values, and nonoverlapping paths.
+
+A claim records the issue, PID, parallel marker, scopes, and start time while the runner owns the dispatch. Live claims consume capacity. Dead claims are released only when persisted runner state is one of the known safe lifecycle outcomes; unsafe or missing state preserves the claim and stops the cycle. The supervisor never bypasses runner admission, ownership, per-issue locking, review, or resource limits.
+
+Locally owned `review-changes` and `publication-retry` states sort before new `Todo` work. They must retain a clean exact worktree, matching branch, session/model ownership, completed blockers, no existing claim, and valid write-scope metadata. Locks and claims compare both PID and process start identity.
 
 ## Admission and Delivery Contract
 
@@ -53,12 +65,15 @@ Delivery requires:
 - open PR targeting `develop`
 - all proof headings populated
 - no P0-P2 finding after at most one same-session remediation
+- validated structured evidence for 1-8 passed tests
+
+Codex subprocesses receive no Linear, GitHub, or Discord credential variables. Publication is a persisted `edited -> committed -> pushed -> pr-created` state machine; retries reconcile local HEAD, remote HEAD, and PR head/base/proof before continuing without re-running the primary model.
 
 ## Model and Resource Policy
 
 `product-agent`, `integration-agent`, and `review-agent` use `gpt-5.6-sol/high`. `backend-agent` and `ios-agent` use `gpt-5.6-terra/medium`. There is no implicit fallback.
 
-The default execution sandbox is `workspace-write`, approval policy is `never`, and review is read-only. The aggregate issue token limit is 120K, no-progress limit is five minutes, and per-invocation execution limit is 20 minutes. Breaches terminate the child process, preserve state, and block the issue.
+The default execution sandbox is `workspace-write`, approval policy is `never`, and review is read-only. The aggregate issue token limit is 120K; prompt, command-output, no-progress, and wall-clock bounds are enforced by the runner. Supervisor dispatch inherits these per-issue limits and does not create a separate token budget. Breaches terminate the child process, preserve state, and block the issue.
 
 ## Reconciliation
 
@@ -68,7 +83,7 @@ The default execution sandbox is `workspace-write`, approval policy is `never`, 
 - ready PR with green checks: one merge-ready notification per head SHA
 - merged PR: `Done` plus completion notification
 
-`status` is read-only. `reconcile [CEN-N]` handles one issue; `reconcile` handles all locally owned issues. No background poller is required.
+Runner `status` is read-only. Runner `reconcile [CEN-N]` handles one issue and runner `reconcile` handles all locally owned issues. Supervisor `reconcile` combines claim recovery with that all-issue reconciliation; supervisor `cleanup` performs only guarded local cleanup. `start` atomically captures `LINEAR_API_KEY` and effective `PATH` in canonical `.dayflow/supervisor.env` before loading the per-user `launchd` job; `stop` unloads it, and supervisor `status` reports scheduling, snapshot, and claims without exposing the environment or dispatching work.
 
 ### Merged PR event closure
 
@@ -80,7 +95,7 @@ A definite non-2xx Discord response changes the claim to `retryable` and fails t
 
 The repository setting **Settings > General > Pull Requests > Automatically delete head branches** owns remote feature-branch deletion. The workflow relies only on the immutable event payload and the merged base branch, so deletion may happen before reconciliation without losing the `CEN-N` mapping. The workflow never calls the Git ref deletion API.
 
-GitHub-hosted reconciliation does not access `.dayflow/` and never removes a local worktree. On the next local runner use, the merged workspace remains inspectable and cannot be resumed from Linear `Done`. Cleanup is deliberately separate: first fetch/prune, confirm `scripts/dayflow_runner.sh status CEN-N` reports the merged PR and `Done`, and confirm the worktree is clean; then remove that exact worktree with non-forced `git worktree remove`. Dirty or legacy workspaces, including CEN-28, are left untouched.
+GitHub-hosted reconciliation does not access `.dayflow/` and never removes a local worktree. Local supervisor reconciliation and cleanup are deliberately ordered before queue selection so merged blockers can release dependent work. Cleanup fetches/prunes and removes only an exact owned worktree after runner status proves `Done`, the tracked PR is merged into `develop`, and the worktree is clean. Dirty workspaces are preserved, and CEN-28 is always excluded from supervisor cleanup.
 
 ## Repository Truth
 
@@ -93,4 +108,6 @@ GitHub-hosted reconciliation does not access `.dayflow/` and never removes a loc
 - `.codex/skills/`
 - `scripts/dayflow_runner.sh`
 - `scripts/lib/dayflow_runner.sh`
+- `scripts/dayflow_supervisor.sh`
+- `scripts/lib/dayflow_supervisor.sh`
 - `scripts/tests/`

@@ -2,11 +2,19 @@
 
 DAYFLOW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT_DIR="${DAYFLOW_ROOT_DIR:-$(cd "$DAYFLOW_SCRIPT_DIR/.." && pwd)}"
-DAYFLOW_RUNTIME_DIR="${DAYFLOW_RUNTIME_DIR:-$ROOT_DIR/.dayflow}"
+DAYFLOW_GIT_COMMON_DIR="$(git -C "$ROOT_DIR" rev-parse --git-common-dir 2>/dev/null || true)"
+if [[ -n "$DAYFLOW_GIT_COMMON_DIR" && "$DAYFLOW_GIT_COMMON_DIR" != /* ]]; then
+  DAYFLOW_GIT_COMMON_DIR="$ROOT_DIR/$DAYFLOW_GIT_COMMON_DIR"
+fi
+DAYFLOW_CANONICAL_REPO_ROOT="$ROOT_DIR"
+if [[ -n "$DAYFLOW_GIT_COMMON_DIR" ]]; then
+  DAYFLOW_CANONICAL_REPO_ROOT="$(cd "$(dirname "$DAYFLOW_GIT_COMMON_DIR")" && pwd)"
+fi
+DAYFLOW_RUNTIME_DIR="${DAYFLOW_RUNTIME_DIR:-$DAYFLOW_CANONICAL_REPO_ROOT/.dayflow}"
 DAYFLOW_WORKTREE_ROOT="${DAYFLOW_WORKTREE_ROOT:-$DAYFLOW_RUNTIME_DIR/worktrees}"
 DAYFLOW_STATE_ROOT="${DAYFLOW_STATE_ROOT:-$DAYFLOW_RUNTIME_DIR/state}"
 DAYFLOW_LOG_ROOT="${DAYFLOW_LOG_ROOT:-$DAYFLOW_RUNTIME_DIR/logs}"
-DAYFLOW_GH_CONFIG_DIR="${GH_CONFIG_DIR:-$DAYFLOW_RUNTIME_DIR/gh}"
+DAYFLOW_GH_CONFIG_DIR="${DAYFLOW_GH_CONFIG_DIR:-${GH_CONFIG_DIR:-$DAYFLOW_RUNTIME_DIR/gh}}"
 DAYFLOW_NOTIFICATIONS_ENV_FILE="${DAYFLOW_NOTIFICATIONS_ENV_FILE:-$DAYFLOW_RUNTIME_DIR/notifications.env}"
 DAYFLOW_MERGE_READY_STORE="${DAYFLOW_MERGE_READY_STORE:-$DAYFLOW_STATE_ROOT/merge-ready.json}"
 DAYFLOW_LEGACY_RUNTIME_DIR="${DAYFLOW_LEGACY_RUNTIME_DIR:-$ROOT_DIR/.symphony}"
@@ -25,6 +33,8 @@ DAYFLOW_CURL_BIN="${DAYFLOW_CURL_BIN:-curl}"
 DAYFLOW_EXECUTION_LIMIT_SECONDS="${DAYFLOW_EXECUTION_LIMIT_SECONDS:-1200}"
 DAYFLOW_STALL_LIMIT_SECONDS="${DAYFLOW_STALL_LIMIT_SECONDS:-300}"
 DAYFLOW_TOKEN_LIMIT="${DAYFLOW_TOKEN_LIMIT:-120000}"
+DAYFLOW_PROMPT_LIMIT_BYTES="${DAYFLOW_PROMPT_LIMIT_BYTES:-32768}"
+DAYFLOW_LOG_LIMIT_BYTES="${DAYFLOW_LOG_LIMIT_BYTES:-5242880}"
 DAYFLOW_MONITOR_INTERVAL_SECONDS="${DAYFLOW_MONITOR_INTERVAL_SECONDS:-2}"
 DAYFLOW_CI_POLL_INTERVAL_SECONDS="${DAYFLOW_CI_POLL_INTERVAL_SECONDS:-5}"
 DAYFLOW_CI_WAIT_TIMEOUT_SECONDS="${DAYFLOW_CI_WAIT_TIMEOUT_SECONDS:-600}"
@@ -180,36 +190,53 @@ dayflow_normalize_merge_ready_store() {
   fi
 }
 
+dayflow_process_start_identity() {
+  ps -o lstart= -p "$1" 2>/dev/null | awk '{$1=$1; print}'
+}
+
+dayflow_pid_identity_matches() {
+  local pid="$1"
+  local expected="$2"
+  local actual
+  [[ "$pid" =~ ^[1-9][0-9]*$ && -n "$expected" ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  actual="$(dayflow_process_start_identity "$pid")"
+  [[ -n "$actual" && "$actual" == "$expected" ]]
+}
+
 dayflow_acquire_lock() {
   local issue_key="$1"
   local lock_dir="$DAYFLOW_STATE_ROOT/${issue_key}.lock"
-  local existing_pid=""
+  local existing_pid="" existing_identity=""
 
   if mkdir "$lock_dir" 2>/dev/null; then
     printf '%s\n' "$$" >"$lock_dir/pid"
+    dayflow_process_start_identity "$$" >"$lock_dir/process-start"
     DAYFLOW_ACTIVE_LOCK_DIR="$lock_dir"
     return 0
   fi
 
   [[ -f "$lock_dir/pid" ]] && existing_pid="$(<"$lock_dir/pid")"
-  if [[ "$existing_pid" =~ ^[0-9]+$ ]] && kill -0 "$existing_pid" 2>/dev/null; then
+  [[ -f "$lock_dir/process-start" ]] && existing_identity="$(<"$lock_dir/process-start")"
+  if dayflow_pid_identity_matches "$existing_pid" "$existing_identity"; then
     dayflow_error "$issue_key is already running under pid $existing_pid"
     return 1
   fi
 
-  rm -f "$lock_dir/pid"
+  rm -f "$lock_dir/pid" "$lock_dir/process-start"
   rmdir "$lock_dir" 2>/dev/null || {
     dayflow_error "unable to recover stale lock for $issue_key"
     return 1
   }
   mkdir "$lock_dir"
   printf '%s\n' "$$" >"$lock_dir/pid"
+  dayflow_process_start_identity "$$" >"$lock_dir/process-start"
   DAYFLOW_ACTIVE_LOCK_DIR="$lock_dir"
 }
 
 dayflow_release_lock() {
   if [[ -n "${DAYFLOW_ACTIVE_LOCK_DIR:-}" && -d "$DAYFLOW_ACTIVE_LOCK_DIR" ]]; then
-    rm -f "$DAYFLOW_ACTIVE_LOCK_DIR/pid"
+    rm -f "$DAYFLOW_ACTIVE_LOCK_DIR/pid" "$DAYFLOW_ACTIVE_LOCK_DIR/process-start"
     rmdir "$DAYFLOW_ACTIVE_LOCK_DIR" 2>/dev/null || true
   fi
   DAYFLOW_ACTIVE_LOCK_DIR=""
@@ -217,19 +244,21 @@ dayflow_release_lock() {
 
 dayflow_acquire_merge_ready_lock() {
   local lock_dir="$DAYFLOW_STATE_ROOT/merge-ready.lock"
-  local existing_pid="" attempt
+  local existing_pid="" existing_identity="" attempt
 
   for ((attempt = 0; attempt < DAYFLOW_SHARED_LOCK_ATTEMPTS; attempt++)); do
     existing_pid=""
     if mkdir "$lock_dir" 2>/dev/null; then
       printf '%s\n' "$$" >"$lock_dir/pid"
+      dayflow_process_start_identity "$$" >"$lock_dir/process-start"
       DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR="$lock_dir"
       return 0
     fi
 
     [[ -f "$lock_dir/pid" ]] && existing_pid="$(<"$lock_dir/pid")"
-    if [[ ! "$existing_pid" =~ ^[0-9]+$ ]] || ! kill -0 "$existing_pid" 2>/dev/null; then
-      rm -f "$lock_dir/pid"
+    [[ -f "$lock_dir/process-start" ]] && existing_identity="$(<"$lock_dir/process-start")"
+    if ! dayflow_pid_identity_matches "$existing_pid" "$existing_identity"; then
+      rm -f "$lock_dir/pid" "$lock_dir/process-start"
       rmdir "$lock_dir" 2>/dev/null || true
       existing_pid=""
       continue
@@ -243,7 +272,7 @@ dayflow_acquire_merge_ready_lock() {
 
 dayflow_release_merge_ready_lock() {
   if [[ -n "${DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR:-}" && -d "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR" ]]; then
-    rm -f "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR/pid"
+    rm -f "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR/pid" "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR/process-start"
     rmdir "$DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR" 2>/dev/null || true
   fi
   DAYFLOW_ACTIVE_MERGE_READY_LOCK_DIR=""
@@ -380,6 +409,38 @@ dayflow_extract_section() {
   ' | sed -E '/^[[:space:]]*$/d'
 }
 
+dayflow_parallel_safe() {
+  local description="$1"
+  local value normalized
+  value="$(printf '%s\n' "$description" | sed -nE 's/^[[:space:]]*(Parallel Safe|Parallel-Safe):[[:space:]]*(.+)[[:space:]]*$/\2/ip' | head -n 1)"
+  if [[ -z "$value" ]]; then
+    value="$(dayflow_extract_section "$description" 'Parallel Safe' | head -n 1 | sed -E 's/^[[:space:]-]+//')"
+  fi
+  normalized="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  [[ "$normalized" == "yes" || "$normalized" == "true" ]]
+}
+
+dayflow_write_scopes() {
+  local description="$1"
+  local inline
+  inline="$(printf '%s\n' "$description" | sed -nE 's/^[[:space:]]*Write Scope:[[:space:]]*(.+)[[:space:]]*$/\1/p' | head -n 1)"
+  if [[ -n "$inline" ]]; then
+    printf '%s\n' "$inline" | tr ',' '\n'
+  else
+    dayflow_extract_section "$description" 'Write Scope'
+  fi | sed -E 's/^[[:space:]*-]+//; s/[`"]//g; s/[[:space:]]+$//; s#/?\*\*$##; s#/$##' |
+    awk 'NF && $0 !~ /^\.\./ && $0 !~ /\/\.\.($|\/)/ && $0 !~ /^\// {print}' |
+    head -n 32
+}
+
+dayflow_issue_references() {
+  local description="$1"
+  dayflow_extract_section "$description" 'Inputs' |
+    sed -E 's/^[[:space:]*-]+//; s/[`"]//g; s/[[:space:]]+$//' |
+    awk 'length($0) <= 160 && $0 ~ /^[A-Za-z0-9._\/-]+$/ && $0 !~ /^\.\./ && $0 !~ /\/\.\.($|\/)/ {print}' |
+    head -n 12
+}
+
 dayflow_primary_agent() {
   local description="$1"
   dayflow_extract_section "$description" 'Primary Agent' |
@@ -428,6 +489,42 @@ dayflow_gh() {
   GH_CONFIG_DIR="$DAYFLOW_GH_CONFIG_DIR" "$DAYFLOW_GH_BIN" "$@"
 }
 
+dayflow_git_publish() {
+  local worktree="$1"
+  shift
+  GH_CONFIG_DIR="$DAYFLOW_GH_CONFIG_DIR" git \
+    -c credential.helper= \
+    -c "credential.helper=!${DAYFLOW_GH_BIN} auth git-credential" \
+    -C "$worktree" "$@"
+}
+
+dayflow_validate_publication_capability() {
+  local worktree="$1"
+  local branch="$2"
+  local repo permission
+  repo="$(dayflow_github_repo)" || return 1
+  dayflow_gh auth status >/dev/null 2>&1 || {
+    dayflow_error 'GitHub CLI authentication is unavailable from the canonical DayFlow runtime'
+    return 1
+  }
+  dayflow_gh repo view "$repo" --json nameWithOwner >/dev/null 2>&1 || {
+    dayflow_error "GitHub repository is not accessible: $repo"
+    return 1
+  }
+  permission="$(dayflow_gh api "repos/$repo" --jq '.permissions.push // false' 2>/dev/null)" || {
+    dayflow_error "unable to verify GitHub publication permission for $repo"
+    return 1
+  }
+  [[ "$permission" == "true" ]] || {
+    dayflow_error "GitHub token does not have push permission for $repo"
+    return 1
+  }
+  dayflow_git_publish "$worktree" push --dry-run origin "HEAD:refs/heads/$branch" >/dev/null 2>&1 || {
+    dayflow_error 'Git transport publication preflight failed'
+    return 1
+  }
+}
+
 dayflow_agent_definition() {
   local agent="$1"
   local path="$ROOT_DIR/.codex/agents/${agent}.md"
@@ -448,7 +545,11 @@ dayflow_issue_prompt() {
   cat <<EOF
 You are the primary ${agent} for ${issue_key} in DayFlow.
 
-Own this issue through implementation, tests, commit, push, a draft PR targeting develop, proof-of-work completion, and review follow-up. Do not mark the PR ready; the runner does that only after a clean automated review of the exact delivered head. Work only in the current issue branch. Do not merge the PR. Keep secrets and runtime artifacts out of git.
+Edit and test only the issue-scoped files in the current isolated worktree. Do not run git add, git commit, git push, gh, Linear, Discord, or PR/lifecycle commands. The deterministic runner owns staging, commit, publication, draft PR proof, readiness, and lifecycle state after your session exits. Keep secrets and runtime artifacts out of the worktree.
+
+Your final response must be one JSON object with this exact shape: {"summary":"short result","tests":[{"name":"focused test name","status":"passed"}]}. Include 1-8 tests you actually ran. Do not include commands for the lifecycle to execute; failed, skipped, missing, or malformed test evidence blocks publication.
+
+Keep investigation narrow. Never print or request a full repository tree, full repository diff, whole large file, complete log, recursive source dump, or unrelated source. Use rg and bounded ranges, keep command output focused, and read only the issue references below plus files directly required to implement them. Do not start MCP servers or connectors.
 
 Issue title: ${title}
 
@@ -458,21 +559,15 @@ ${description}
 Agent definition:
 $(dayflow_agent_definition "$agent")
 
-Required PR proof headings:
-- Changed files
-- Behavior implemented
-- Tests run
-- Review feedback addressed
-- Complexity snapshot
-- Risks or follow-ups
-- Next suggested issue
+Narrow issue references:
+$(dayflow_issue_references "$description" | sed 's/^/- /')
 EOF
 }
 
 dayflow_review_prompt() {
   local issue_key="$1"
   cat <<EOF
-Review the current ${issue_key} branch against origin/develop. Follow the repository review-agent definition and docs/review-checklist.md. Do not edit files. Return only the requested structured review result. Classify actionable findings as P0, P1, P2, or P3. P0-P2 block merge readiness.
+Review the current ${issue_key} branch against origin/develop. Follow the repository review-agent definition and the single narrow checklist below. Do not edit files. Return only the requested structured review result. Classify actionable findings as P0, P1, P2, or P3. P0-P2 block merge readiness. Never dump a whole repository, large file, log, or recursive diff, and do not start MCP servers or connectors.
 
 Review agent definition:
 $(dayflow_agent_definition review-agent)
@@ -505,6 +600,7 @@ dayflow_validate_resume_state() {
   local expected_agent="$3"
   local expected_model="$4"
   local expected_reasoning="$5"
+  local allow_dirty="${6:-false}"
   local state_file worktree branch session_id persisted_agent persisted_model persisted_reasoning
   state_file="$(dayflow_state_file "$issue_key")"
   [[ -f "$state_file" ]] || {
@@ -527,6 +623,10 @@ dayflow_validate_resume_state() {
   }
   [[ "$persisted_agent" == "$expected_agent" && "$persisted_model" == "$expected_model" && "$persisted_reasoning" == "$expected_reasoning" ]] || {
     dayflow_error "$issue_key resume ownership metadata no longer matches Linear routing"
+    return 1
+  }
+  [[ "$allow_dirty" == "true" || -z "$(git -C "$worktree" status --porcelain --untracked-files=normal)" ]] || {
+    dayflow_error "$issue_key resume worktree is dirty"
     return 1
   }
   printf '%s\n' "$worktree"
@@ -584,23 +684,39 @@ dayflow_validate_pre_session_recovery() {
   printf '%s\n' "$worktree"
 }
 
-dayflow_jsonl_tokens() {
+dayflow_jsonl_usage() {
   local log_file="$1"
   [[ -s "$log_file" ]] || {
-    printf '0\n'
+    printf '%s\n' '{"input_tokens":0,"cached_input_tokens":0,"uncached_input_tokens":0,"output_tokens":0,"total_tokens":0}'
     return
   }
   jq -R -s '
     split("\n") | map(fromjson? // empty)
     | [ .[]
       | (.usage // .token_usage // .response.usage // .event.usage // .item.usage // empty)
-      | (
-          .total_tokens // .totalTokens //
-          ((.input_tokens // .inputTokens // .prompt_tokens // .promptTokens // 0) +
-           (.output_tokens // .outputTokens // .completion_tokens // .completionTokens // 0))
-        )
-    ] | add // 0
-  ' "$log_file" 2>/dev/null || printf '0\n'
+      | {
+          input: (.input_tokens // .inputTokens // .prompt_tokens // .promptTokens // 0),
+          cached: (.cached_input_tokens // .cachedInputTokens // .input_tokens_details.cached_tokens // .prompt_tokens_details.cached_tokens // 0),
+          output: (.output_tokens // .outputTokens // .completion_tokens // .completionTokens // 0),
+          total: (.total_tokens // .totalTokens // 0)
+        }
+    ] as $snapshots
+    | ($snapshots | map(.input) | max // 0) as $input
+    | ($snapshots | map(.cached) | max // 0) as $cached
+    | ($snapshots | map(.output) | max // 0) as $output
+    | ($snapshots | map(.total) | max // 0) as $reported_total
+    | {
+        input_tokens: $input,
+        cached_input_tokens: ([$cached, $input] | min),
+        uncached_input_tokens: ($input - ([$cached, $input] | min)),
+        output_tokens: $output,
+        total_tokens: ([$reported_total, ($input + $output)] | max)
+      }
+  ' "$log_file" 2>/dev/null || printf '%s\n' '{"input_tokens":0,"cached_input_tokens":0,"uncached_input_tokens":0,"output_tokens":0,"total_tokens":0}'
+}
+
+dayflow_jsonl_tokens() {
+  dayflow_jsonl_usage "$1" | jq -r '.total_tokens'
 }
 
 dayflow_jsonl_session_id() {
@@ -624,8 +740,12 @@ dayflow_stop_process_tree() {
   [[ "$pid" =~ ^[0-9]+$ ]] || return 0
   kill -0 "$pid" 2>/dev/null || return 0
 
-  runner_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
-  target_pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')"
+  target_pgid="${DAYFLOW_ACTIVE_CODEX_PGID:-}"
+  runner_pgid=""
+  if [[ ! "$target_pgid" =~ ^[0-9]+$ ]]; then
+    runner_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || true)"
+    target_pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+  fi
   if [[ -n "$target_pgid" && "$target_pgid" != "$runner_pgid" ]]; then
     kill -TERM -- "-$target_pgid" 2>/dev/null || true
   else
@@ -670,20 +790,32 @@ dayflow_codex_command() {
   local prompt_file="$6"
   local output_file="$7"
   local schema="$ROOT_DIR/scripts/schemas/dayflow-review.schema.json"
-  local common=(--json -m "$model" -c "model_reasoning_effort=\"$reasoning\"" -c 'approval_policy="never"')
+  local common=(--json -m "$model" -c "model_reasoning_effort=\"$reasoning\"" -c 'approval_policy="never"' -c 'mcp_servers={}')
+  local scrub=(env)
+  local env_name
+  while IFS='=' read -r env_name _; do
+    case "$env_name" in
+      LINEAR_*|GH_*|GITHUB_*|*DISCORD*|DAYFLOW_GH_*|DAYFLOW_NOTIFICATIONS_ENV_FILE)
+        scrub+=(-u "$env_name")
+        ;;
+    esac
+  done < <(env)
 
   case "$mode" in
     primary-new)
-      "$DAYFLOW_CODEX_BIN" exec "${common[@]}" -s "$DAYFLOW_DEFAULT_SANDBOX" -C "$worktree" -o "$output_file" - <"$prompt_file"
+      "${scrub[@]}" \
+        "$DAYFLOW_CODEX_BIN" exec "${common[@]}" -s "$DAYFLOW_DEFAULT_SANDBOX" -C "$worktree" -o "$output_file" - <"$prompt_file"
       ;;
     primary-resume)
       (
         cd "$worktree"
-        "$DAYFLOW_CODEX_BIN" exec resume "${common[@]}" -c "sandbox_mode=\"$DAYFLOW_DEFAULT_SANDBOX\"" -o "$output_file" "$session_id" - <"$prompt_file"
+        "${scrub[@]}" \
+          "$DAYFLOW_CODEX_BIN" exec resume "${common[@]}" -c "sandbox_mode=\"$DAYFLOW_DEFAULT_SANDBOX\"" -o "$output_file" "$session_id" - <"$prompt_file"
       )
       ;;
     review)
-      "$DAYFLOW_CODEX_BIN" exec "${common[@]}" -s read-only -C "$worktree" --output-schema "$schema" -o "$output_file" - <"$prompt_file"
+      "${scrub[@]}" \
+        "$DAYFLOW_CODEX_BIN" exec "${common[@]}" -s read-only -C "$worktree" --output-schema "$schema" -o "$output_file" - <"$prompt_file"
       ;;
     *)
       dayflow_error "unknown Codex mode: $mode"
@@ -703,6 +835,15 @@ dayflow_execute_bounded() {
   local log_file="$8"
   local output_file="$9"
   local started_at now last_progress last_size=0 size elapsed invocation_tokens aggregate_tokens pid rc=0 limit_reason=""
+  local prompt_size invocation_usage input_tokens cached_input_tokens uncached_input_tokens output_tokens
+  local restore_job_control=false
+
+  prompt_size="$(wc -c <"$prompt_file" | tr -d ' ')"
+  if (( prompt_size > DAYFLOW_PROMPT_LIMIT_BYTES )); then
+    DAYFLOW_EXECUTION_ERROR="prompt limit exceeded (${prompt_size}/${DAYFLOW_PROMPT_LIMIT_BYTES} bytes)"
+    export DAYFLOW_EXECUTION_ERROR
+    return 124
+  fi
 
   aggregate_tokens="$(dayflow_state_value "$issue_key" '.tokens_used // 0' 2>/dev/null || printf '0')"
   if (( aggregate_tokens >= DAYFLOW_TOKEN_LIMIT )); then
@@ -714,13 +855,20 @@ dayflow_execute_bounded() {
   : >"$log_file"
   started_at="$(date +%s)"
   last_progress="$started_at"
+  if [[ $- != *m* ]]; then
+    set -m
+    restore_job_control=true
+  fi
   (
     trap - EXIT INT TERM
     dayflow_codex_command "$mode" "$worktree" "$model" "$reasoning" "$session_id" "$prompt_file" "$output_file"
   ) >"$log_file" 2>&1 &
   pid=$!
+  if [[ "$restore_job_control" == "true" ]]; then
+    set +m
+  fi
   DAYFLOW_ACTIVE_CODEX_PID="$pid"
-  DAYFLOW_ACTIVE_CODEX_PGID="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')"
+  DAYFLOW_ACTIVE_CODEX_PGID="$pid"
 
   while kill -0 "$pid" 2>/dev/null; do
     sleep "$DAYFLOW_MONITOR_INTERVAL_SECONDS"
@@ -737,7 +885,9 @@ dayflow_execute_bounded() {
     elapsed=$((now - started_at))
     invocation_tokens="$(dayflow_jsonl_tokens "$log_file")"
     aggregate_tokens="$(dayflow_state_value "$issue_key" '.tokens_used // 0' 2>/dev/null || printf '0')"
-    if (( aggregate_tokens + invocation_tokens >= DAYFLOW_TOKEN_LIMIT )); then
+    if (( size >= DAYFLOW_LOG_LIMIT_BYTES )); then
+      limit_reason="command output limit exceeded (${DAYFLOW_LOG_LIMIT_BYTES} bytes)"
+    elif (( aggregate_tokens + invocation_tokens >= DAYFLOW_TOKEN_LIMIT )); then
       limit_reason="token limit exceeded (${DAYFLOW_TOKEN_LIMIT})"
     elif (( now - last_progress >= DAYFLOW_STALL_LIMIT_SECONDS )); then
       limit_reason="no progress for ${DAYFLOW_STALL_LIMIT_SECONDS}s"
@@ -759,13 +909,29 @@ dayflow_execute_bounded() {
     rc=124
   fi
 
-  invocation_tokens="$(dayflow_jsonl_tokens "$log_file")"
+  invocation_usage="$(dayflow_jsonl_usage "$log_file")"
+  invocation_tokens="$(jq -r '.total_tokens' <<<"$invocation_usage")"
+  input_tokens="$(jq -r '.input_tokens' <<<"$invocation_usage")"
+  cached_input_tokens="$(jq -r '.cached_input_tokens' <<<"$invocation_usage")"
+  uncached_input_tokens="$(jq -r '.uncached_input_tokens' <<<"$invocation_usage")"
+  output_tokens="$(jq -r '.output_tokens' <<<"$invocation_usage")"
   aggregate_tokens="$(dayflow_state_value "$issue_key" '.tokens_used // 0' 2>/dev/null || printf '0')"
   aggregate_tokens=$((aggregate_tokens + invocation_tokens))
   dayflow_state_update "$issue_key" \
     --argjson tokens "$aggregate_tokens" \
+    --argjson input "$input_tokens" \
+    --argjson cached "$cached_input_tokens" \
+    --argjson uncached "$uncached_input_tokens" \
+    --argjson output "$output_tokens" \
     --arg at "$(dayflow_now_iso)" \
-    '.tokens_used = $tokens | .updated_at = $at'
+    '.tokens_used = $tokens
+     | .usage = ((.usage // {input_tokens: 0, cached_input_tokens: 0, uncached_input_tokens: 0, output_tokens: 0, invocations: 0})
+       | .input_tokens += $input
+       | .cached_input_tokens += $cached
+       | .uncached_input_tokens += $uncached
+       | .output_tokens += $output
+       | .invocations += 1)
+     | .updated_at = $at'
 
   if [[ -z "$limit_reason" && "$rc" == "0" ]] && (( aggregate_tokens >= DAYFLOW_TOKEN_LIMIT )); then
     limit_reason="token limit exceeded after process exit (${DAYFLOW_TOKEN_LIMIT})"
@@ -812,6 +978,235 @@ dayflow_pr_for_branch() {
     --json number,url,isDraft,state,headRefName,headRefOid,baseRefName,mergeStateStatus,body
 }
 
+dayflow_path_matches_scope() {
+  local path="$1"
+  local scope="$2"
+  [[ "$path" == "$scope" || "$path" == "$scope/"* ]]
+}
+
+dayflow_validate_changed_paths() {
+  local issue_json="$1"
+  local worktree="$2"
+  local description scopes path scope matched
+  description="$(jq -r '.description // ""' <<<"$issue_json")"
+  scopes="$(dayflow_write_scopes "$description")"
+  if dayflow_parallel_safe "$description" && [[ -z "$scopes" ]]; then
+    dayflow_error 'Parallel Safe issues require a non-empty Write Scope'
+    return 1
+  fi
+  [[ -n "$scopes" ]] || return 0
+
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    matched=false
+    while IFS= read -r scope; do
+      [[ -n "$scope" ]] || continue
+      if dayflow_path_matches_scope "$path" "$scope"; then
+        matched=true
+        break
+      fi
+    done <<<"$scopes"
+    [[ "$matched" == "true" ]] || {
+      dayflow_error "changed path is outside declared Write Scope: $path"
+      return 1
+    }
+  done < <({
+    git -C "$worktree" diff --name-only
+    git -C "$worktree" diff --cached --name-only
+    git -C "$worktree" ls-files --others --exclude-standard
+  } | awk 'NF && !seen[$0]++')
+}
+
+dayflow_validate_test_evidence() {
+  local output_file="$1"
+  jq -ce 'select(
+    type == "object"
+    and ((keys | sort) == ["summary", "tests"])
+    and (.summary | type == "string" and length >= 1 and length <= 500)
+    and (.tests | type == "array" and length >= 1 and length <= 8)
+    and all(.tests[];
+      type == "object"
+      and ((keys | sort) == ["name", "status"])
+      and (.name | type == "string" and length >= 1 and length <= 160)
+      and .status == "passed"))
+  ' "$output_file"
+}
+
+dayflow_store_test_evidence() {
+  local issue_key="$1"
+  local output_file="$2"
+  local review_context="$3"
+  local evidence
+  evidence="$(dayflow_validate_test_evidence "$output_file")" || {
+    dayflow_error 'primary output lacks valid passed test evidence'
+    return 1
+  }
+  dayflow_state_update "$issue_key" --argjson evidence "$evidence" --arg context "$review_context" --arg at "$(dayflow_now_iso)" '
+    .test_evidence = $evidence
+    | .publication = {phase: "edited", review_context: $context}
+    | .status = "publication-retry"
+    | .updated_at = $at
+    | del(.last_error)'
+}
+
+dayflow_is_publication_recovery() {
+  local issue_key="$1"
+  local state_file
+  state_file="$(dayflow_state_file "$issue_key")"
+  [[ -f "$state_file" ]] || return 1
+  [[ "$(jq -r '.status // ""' "$state_file")" == "publication-retry" ]]
+}
+
+dayflow_mark_publication_retry() {
+  local issue_key="$1"
+  local reason="$2"
+  dayflow_state_update "$issue_key" --arg reason "$reason" --arg at "$(dayflow_now_iso)" \
+    '.status = "publication-retry" | .last_error = $reason | .updated_at = $at'
+}
+
+dayflow_defer_owned_recovery() {
+  local issue_key="$1"
+  local recovery_status="$2"
+  local reason="$3"
+  dayflow_state_update "$issue_key" --arg status "$recovery_status" --arg reason "$reason" --arg at "$(dayflow_now_iso)" \
+    '.status = $status | .last_error = $reason | .updated_at = $at'
+  dayflow_notify "DayFlow ${issue_key} recovery deferred" "$reason" 15158332 || true
+}
+
+dayflow_mark_running() {
+  local issue_key="$1"
+  local issue_id="$2"
+  local title="$3"
+  local primary="$4"
+  local model="$5"
+  local reasoning="$6"
+  local branch="$7"
+  local worktree="$8"
+  dayflow_state_update "$issue_key" \
+    --arg issue "$issue_key" --arg id "$issue_id" --arg title "$title" --arg agent "$primary" \
+    --arg model "$model" --arg reasoning "$reasoning" --arg branch "$branch" --arg worktree "$worktree" \
+    --arg at "$(dayflow_now_iso)" \
+    '. + {issue: $issue, issue_id: $id, title: $title, primary_agent: $agent, model: $model, reasoning: $reasoning, branch: $branch, worktree: $worktree, status: "running", updated_at: $at, tokens_used: (.tokens_used // 0)}'
+}
+
+dayflow_mark_publication_unsafe() {
+  local issue_key="$1"
+  local reason="$2"
+  dayflow_state_update "$issue_key" --arg reason "$reason" --arg at "$(dayflow_now_iso)" \
+    '.publication.failure = "unsafe" | .last_error = $reason | .updated_at = $at'
+  dayflow_error "$reason"
+  return 1
+}
+
+dayflow_write_pr_proof() {
+  local issue_key="$1"
+  local title="$2"
+  local worktree="$3"
+  local body_file="$4"
+  local review_context="$5"
+  local short_title files shortstat evidence
+  short_title="$(printf '%s' "$title" | sed -E 's/^\[[^]]+\][[:space:]]*//')"
+  files="$(git -C "$worktree" diff --name-only origin/develop...HEAD | head -n 100)"
+  shortstat="$(git -C "$worktree" diff --shortstat origin/develop...HEAD | sed -E 's/^[[:space:]]+//')"
+  [[ -n "$shortstat" ]] || shortstat='No textual diff statistics available.'
+  evidence="$(jq -c '.test_evidence' "$(dayflow_state_file "$issue_key")")"
+  {
+    printf '# %s: %s\n\n' "$issue_key" "$short_title"
+    printf '## Changed files\n\n'
+    printf '%s\n' "$files" | sed 's/^/- `/' | sed 's/$/`/'
+    printf '\n## Behavior implemented\n\n- Issue-scoped changes were produced by the bounded primary edit/test session and published deterministically by the DayFlow runner.\n'
+    printf '\n## Tests run\n\n'
+    jq -r '.tests[] | "- " + .name + " (`" + .status + "`)"' <<<"$evidence"
+    printf '\n## Review feedback addressed\n\n- %s\n' "$review_context"
+    printf '\n## Complexity snapshot\n\n- %s\n' "$shortstat"
+    printf '\n## Risks or follow-ups\n\n- Automated review and CI remain required before merge readiness.\n'
+    printf '\n## Next suggested issue\n\n- Dispatch the next dependency-eligible Linear Todo issue after this PR merges.\n'
+  } >"$body_file"
+}
+
+dayflow_publish_issue_changes() {
+  local issue_json="$1"
+  local branch="$2"
+  local worktree="$3"
+  local review_context="${4:-Not applicable before automated review.}"
+  local issue_key title commit_title body_file repo prs pr_number phase local_head remote_head remote_sha expected_subject pr_json
+  issue_key="$(jq -r '.identifier' <<<"$issue_json")"
+  title="$(jq -r '.title' <<<"$issue_json")"
+  commit_title="$(printf '%s' "$title" | sed -E 's/^\[[^]]+\][[:space:]]*//' | cut -c1-68)"
+  expected_subject="feat(${issue_key}): ${commit_title}"
+  [[ "$worktree" == "$DAYFLOW_WORKTREE_ROOT/$issue_key" && "$(git -C "$worktree" branch --show-current)" == "$branch" ]] || {
+    dayflow_mark_publication_unsafe "$issue_key" 'publication worktree or branch ownership mismatch'
+    return
+  }
+  [[ -z "$(git -C "$worktree" diff --cached --name-only)" ]] || {
+    dayflow_mark_publication_unsafe "$issue_key" 'model session modified the Git index; publication fails closed'
+    return
+  }
+  phase="$(dayflow_state_value "$issue_key" '.publication.phase // ""')"
+  case "$phase" in edited|committed|pushed|pr-created) ;; *) dayflow_mark_publication_unsafe "$issue_key" 'publication phase is missing or invalid'; return ;; esac
+  if [[ -n "$(git -C "$worktree" status --porcelain --untracked-files=normal)" ]]; then
+    [[ "$phase" == "edited" ]] || { dayflow_mark_publication_unsafe "$issue_key" 'published worktree became dirty'; return; }
+    dayflow_validate_changed_paths "$issue_json" "$worktree" || { dayflow_mark_publication_unsafe "$issue_key" 'changed paths violate publication ownership'; return; }
+    git -C "$worktree" diff --check || { dayflow_mark_publication_unsafe "$issue_key" 'publication diff validation failed'; return; }
+    git -C "$worktree" add -A || return 1
+    git -C "$worktree" diff --cached --quiet && { dayflow_error 'no staged issue changes remain after deterministic staging'; return 1; }
+    git -C "$worktree" commit -m "$expected_subject" >/dev/null || return 1
+  elif [[ "$phase" == "edited" ]]; then
+    [[ "$(git -C "$worktree" log -1 --format=%s)" == "$expected_subject" ]] || {
+      dayflow_mark_publication_unsafe "$issue_key" 'clean publication recovery does not match the deterministic commit'
+      return
+    }
+  fi
+  local_head="$(git -C "$worktree" rev-parse HEAD)"
+  if [[ "$phase" == "edited" ]]; then
+    dayflow_state_update "$issue_key" --arg head "$local_head" --arg at "$(dayflow_now_iso)" \
+      '.publication.phase = "committed" | .publication.head_sha = $head | .updated_at = $at'
+    phase=committed
+  else
+    [[ "$(dayflow_state_value "$issue_key" '.publication.head_sha // ""')" == "$local_head" ]] || {
+      dayflow_mark_publication_unsafe "$issue_key" 'publication HEAD differs from persisted publication head'
+      return
+    }
+  fi
+
+  remote_head="$(git -C "$worktree" ls-remote --heads origin "refs/heads/$branch")"
+  remote_sha="$(awk 'NR == 1 {print $1}' <<<"$remote_head")"
+  if [[ -n "$remote_sha" && "$remote_sha" != "$local_head" ]] && \
+     ! { [[ "$phase" == "committed" ]] && git -C "$worktree" merge-base --is-ancestor "$remote_sha" "$local_head"; }; then
+    dayflow_mark_publication_unsafe "$issue_key" 'remote publication branch differs from local HEAD; refusing non-fast-forward recovery'
+    return
+  fi
+  if [[ "$remote_sha" != "$local_head" ]]; then
+    dayflow_git_publish "$worktree" push -u origin "HEAD:refs/heads/$branch" >/dev/null || return 1
+  fi
+  if [[ "$phase" == "committed" ]]; then
+    dayflow_state_update "$issue_key" --arg at "$(dayflow_now_iso)" '.publication.phase = "pushed" | .updated_at = $at'
+    phase=pushed
+  fi
+
+  body_file="$DAYFLOW_LOG_ROOT/${issue_key}-pr-body.md"
+  review_context="$(dayflow_state_value "$issue_key" '.publication.review_context // "Not applicable before automated review."')"
+  dayflow_write_pr_proof "$issue_key" "$title" "$worktree" "$body_file" "$review_context"
+  repo="$(dayflow_github_repo)"
+  prs="$(dayflow_pr_for_branch "$branch" open)" || return 1
+  pr_number="$(jq -r '.[0].number // empty' <<<"$prs")"
+  if [[ -n "$pr_number" ]]; then
+    pr_json="$(jq -ce --arg branch "$branch" --arg head "$local_head" '.[0] | select(.headRefName == $branch and .baseRefName == "develop" and .headRefOid == $head)' <<<"$prs")" || {
+      dayflow_mark_publication_unsafe "$issue_key" 'existing PR does not match publication branch, base, and head'
+      return
+    }
+    dayflow_gh pr edit -R "$repo" "$pr_number" --title "${issue_key}: ${commit_title}" --body-file "$body_file" >/dev/null || return 1
+    if [[ "$(jq -r '.[0].isDraft // true' <<<"$prs")" != "true" ]]; then
+      dayflow_gh pr ready -R "$repo" --undo "$pr_number" >/dev/null || return 1
+    fi
+  else
+    dayflow_gh pr create -R "$repo" --draft --base develop --head "$branch" \
+      --title "${issue_key}: ${commit_title}" --body-file "$body_file" >/dev/null || return 1
+  fi
+  dayflow_state_update "$issue_key" --arg at "$(dayflow_now_iso)" '.publication.phase = "pr-created" | .updated_at = $at'
+  dayflow_validate_delivery "$issue_key" "$branch" "$worktree"
+}
+
 dayflow_validate_proof() {
   local body="$1"
   local heading section
@@ -836,6 +1231,10 @@ dayflow_validate_delivery() {
   current_branch="$(git -C "$worktree" branch --show-current)"
   [[ "$current_branch" == "$branch" ]] || {
     dayflow_error "delivery branch mismatch: $current_branch"
+    return 1
+  }
+  [[ -z "$(git -C "$worktree" status --porcelain --untracked-files=normal)" ]] || {
+    dayflow_error 'delivery worktree is dirty'
     return 1
   }
   commit_count="$(git -C "$worktree" rev-list --count origin/develop..HEAD)"
@@ -956,17 +1355,25 @@ dayflow_wait_for_ci() {
   done
 }
 
-dayflow_has_requested_changes() {
+dayflow_current_requested_changes() {
   local pr_number="$1"
   local repo detail
   repo="$(dayflow_github_repo)"
   detail="$(dayflow_gh pr view -R "$repo" "$pr_number" --json reviews,commits)"
-  jq -e '
+  jq -ce '
     ((.commits | last | .committedDate) // "") as $latest
     | (.reviews // [] | map(select(.submittedAt != null and .author.login != null and .state != "COMMENTED"))
       | sort_by(.submittedAt) | group_by(.author.login) | map(last)
-      | map(select(.submittedAt >= $latest)) | any(.state == "CHANGES_REQUESTED"))
-  ' >/dev/null <<<"$detail"
+      | map(select(.submittedAt >= $latest and .state == "CHANGES_REQUESTED"))
+      | map({author: .author.login, submitted_at: .submittedAt, body: ((.body // "")[:2000])})
+      | .[:8]) as $reviews
+    | select(($reviews | length) > 0)
+    | {reviews: $reviews}
+  ' <<<"$detail"
+}
+
+dayflow_has_requested_changes() {
+  dayflow_current_requested_changes "$1" >/dev/null
 }
 
 dayflow_record_merge_ready() {
@@ -1006,7 +1413,7 @@ dayflow_record_merge_ready() {
 dayflow_reconcile_one() {
   local issue_key="$1"
   local state_file issue_json issue_id branch prs pr_json pr_number pr_url head_sha reviewed_head_sha
-  local is_draft pr_state current_state base_branch head_branch merge_state
+  local is_draft pr_state current_state base_branch head_branch merge_state requested_changes
   state_file="$(dayflow_state_file "$issue_key")"
   [[ -f "$state_file" ]] || {
     dayflow_error "no local state for $issue_key"
@@ -1053,12 +1460,16 @@ dayflow_reconcile_one() {
     return 0
   fi
 
-  if dayflow_has_requested_changes "$pr_number"; then
+  if requested_changes="$(dayflow_current_requested_changes "$pr_number")"; then
     if [[ "$is_draft" != "true" ]]; then
       dayflow_gh pr ready -R "$(dayflow_github_repo)" --undo "$pr_number" >/dev/null
     fi
     dayflow_linear_set_state "$issue_id" "$DAYFLOW_STATE_IN_PROGRESS_NAME"
-    dayflow_state_update "$issue_key" --arg at "$(dayflow_now_iso)" '.status = "review-changes" | .updated_at = $at'
+    dayflow_state_update "$issue_key" --argjson feedback "$requested_changes" --arg head "$head_sha" --arg at "$(dayflow_now_iso)" '
+      .status = "review-changes"
+      | .reviewed_head_sha = $head
+      | .requested_changes = ($feedback + {reviewed_head_sha: $head})
+      | .updated_at = $at'
     return 0
   fi
 
@@ -1096,7 +1507,7 @@ dayflow_run_issue() {
   local issue_json issue_id title description linear_state primary model_route model reasoning branch worktree session_id mode
   local timestamp prompt_file log_file output_file pr_json pr_number review_prompt review_log review_output
   local review_round=1 findings_comment remediation_prompt remediation_log remediation_output repo
-  local pre_session_recovery=false
+  local pre_session_recovery=false publication_recovery=false requested_changes_recovery=false recovery_status=""
 
   dayflow_validate_issue_key "$issue_key" || {
     dayflow_error "invalid issue key: $issue_key"
@@ -1118,9 +1529,22 @@ dayflow_run_issue() {
   if dayflow_is_pre_session_recovery "$issue_key"; then
     pre_session_recovery=true
   fi
+  if dayflow_is_publication_recovery "$issue_key"; then
+    publication_recovery=true
+  fi
+  if [[ -f "$(dayflow_state_file "$issue_key")" && "$(dayflow_state_value "$issue_key" '.status // ""')" == "review-changes" ]]; then
+    requested_changes_recovery=true
+  fi
+  if [[ "$publication_recovery" == "true" ]]; then
+    recovery_status="publication-retry"
+  elif [[ "$requested_changes_recovery" == "true" ]]; then
+    recovery_status="review-changes"
+  fi
 
   if [[ "$DAYFLOW_DRY_RUN" == "true" ]]; then
-    if [[ "$pre_session_recovery" == "true" ]]; then
+    if [[ "$publication_recovery" == "true" || "$requested_changes_recovery" == "true" ]]; then
+      dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" true >/dev/null || return 1
+    elif [[ "$pre_session_recovery" == "true" ]]; then
       case "$linear_state" in
         "$DAYFLOW_STATE_TODO_NAME"|"$DAYFLOW_STATE_BLOCKED_NAME"|"$DAYFLOW_STATE_IN_PROGRESS_NAME")
           dayflow_validate_pre_session_recovery "$issue_key" "$branch" "$primary" "$model" "$reasoning" >/dev/null || return 1
@@ -1145,7 +1569,23 @@ dayflow_run_issue() {
 
   dayflow_acquire_lock "$issue_key" || return 1
   dayflow_install_cleanup_traps
-  if dayflow_is_pre_session_recovery "$issue_key"; then
+  if [[ "$publication_recovery" == "true" ]]; then
+    case "$linear_state" in
+      "$DAYFLOW_STATE_TODO_NAME"|"$DAYFLOW_STATE_BLOCKED_NAME"|"$DAYFLOW_STATE_IN_PROGRESS_NAME"|"$DAYFLOW_STATE_IN_REVIEW_NAME") ;;
+      *) dayflow_error "publication recovery is not runnable from issue state: $linear_state"; return 1 ;;
+    esac
+    worktree="$(dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" true)" || return 1
+    session_id="$(dayflow_state_value "$issue_key" '.session_id')"
+    mode="primary-resume"
+  elif [[ "$requested_changes_recovery" == "true" ]]; then
+    case "$linear_state" in
+      "$DAYFLOW_STATE_TODO_NAME"|"$DAYFLOW_STATE_IN_PROGRESS_NAME"|"$DAYFLOW_STATE_IN_REVIEW_NAME") ;;
+      *) dayflow_error "requested-changes recovery is not runnable from issue state: $linear_state"; return 1 ;;
+    esac
+    worktree="$(dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning")" || return 1
+    session_id="$(dayflow_state_value "$issue_key" '.session_id')"
+    mode="primary-resume"
+  elif dayflow_is_pre_session_recovery "$issue_key"; then
     case "$linear_state" in
       "$DAYFLOW_STATE_TODO_NAME"|"$DAYFLOW_STATE_BLOCKED_NAME"|"$DAYFLOW_STATE_IN_PROGRESS_NAME") ;;
       *) dayflow_error "pre-session recovery is not runnable from issue state: $linear_state"; return 1 ;;
@@ -1172,40 +1612,79 @@ dayflow_run_issue() {
     esac
   fi
 
-  dayflow_state_update "$issue_key" \
-    --arg issue "$issue_key" --arg id "$issue_id" --arg title "$title" --arg agent "$primary" \
-    --arg model "$model" --arg reasoning "$reasoning" --arg branch "$branch" --arg worktree "$worktree" \
-    --arg at "$(dayflow_now_iso)" \
-    '. + {issue: $issue, issue_id: $id, title: $title, primary_agent: $agent, model: $model, reasoning: $reasoning, branch: $branch, worktree: $worktree, status: "running", updated_at: $at, tokens_used: (.tokens_used // 0)}'
-  if ! dayflow_linear_set_state "$issue_id" "$DAYFLOW_STATE_IN_PROGRESS_NAME"; then
-    dayflow_state_update "$issue_key" --arg at "$(dayflow_now_iso)" \
-      '.status = "pre-session-blocked" | .last_error = "Linear In Progress transition failed before Codex launch" | .updated_at = $at | del(.session_id)'
-    dayflow_linear_set_state "$issue_id" "$DAYFLOW_STATE_BLOCKED_NAME" || true
-    dayflow_notify_state "$issue_key" "$DAYFLOW_STATE_BLOCKED_NAME" "Linear In Progress transition failed before Codex launch; workspace preserved."
+  if [[ -z "$recovery_status" ]]; then
+    dayflow_mark_running "$issue_key" "$issue_id" "$title" "$primary" "$model" "$reasoning" "$branch" "$worktree"
+  fi
+  if ! dayflow_validate_publication_capability "$worktree" "$branch"; then
+    if [[ -n "$recovery_status" ]]; then
+      dayflow_defer_owned_recovery "$issue_key" "$recovery_status" 'GitHub publication capability preflight failed during owned recovery.'
+    else
+      dayflow_state_update "$issue_key" --arg at "$(dayflow_now_iso)" \
+        '.status = "pre-session-blocked" | .last_error = "GitHub publication capability preflight failed before Codex launch" | .updated_at = $at | del(.session_id)'
+      dayflow_linear_set_state "$issue_id" "$DAYFLOW_STATE_BLOCKED_NAME" || true
+      dayflow_notify_state "$issue_key" "$DAYFLOW_STATE_BLOCKED_NAME" 'GitHub publication capability preflight failed before Codex launch; clean workspace preserved.'
+    fi
     return 1
   fi
-  dayflow_notify_state "$issue_key" "$DAYFLOW_STATE_IN_PROGRESS_NAME" "Primary agent ${primary} started with ${model}/${reasoning}."
+  if ! dayflow_linear_set_state "$issue_id" "$DAYFLOW_STATE_IN_PROGRESS_NAME"; then
+    if [[ -n "$recovery_status" ]]; then
+      dayflow_defer_owned_recovery "$issue_key" "$recovery_status" 'Linear In Progress transition failed during owned recovery.'
+    else
+      dayflow_state_update "$issue_key" --arg at "$(dayflow_now_iso)" \
+        '.status = "pre-session-blocked" | .last_error = "Linear In Progress transition failed before Codex launch" | .updated_at = $at | del(.session_id)'
+      dayflow_linear_set_state "$issue_id" "$DAYFLOW_STATE_BLOCKED_NAME" || true
+      dayflow_notify_state "$issue_key" "$DAYFLOW_STATE_BLOCKED_NAME" "Linear In Progress transition failed before Codex launch; workspace preserved."
+    fi
+    return 1
+  fi
+  if [[ -n "$recovery_status" ]]; then
+    dayflow_mark_running "$issue_key" "$issue_id" "$title" "$primary" "$model" "$reasoning" "$branch" "$worktree"
+  fi
+  if [[ "$publication_recovery" != "true" ]]; then
+    dayflow_notify_state "$issue_key" "$DAYFLOW_STATE_IN_PROGRESS_NAME" "Primary agent ${primary} started with ${model}/${reasoning}."
+  fi
 
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
   prompt_file="$DAYFLOW_LOG_ROOT/${issue_key}-${timestamp}-primary.prompt"
   log_file="$DAYFLOW_LOG_ROOT/${issue_key}-${timestamp}-primary.jsonl"
   output_file="$DAYFLOW_LOG_ROOT/${issue_key}-${timestamp}-primary.out"
-  dayflow_issue_prompt "$issue_json" "$primary" >"$prompt_file"
-  if ! dayflow_execute_bounded "$issue_key" "$mode" "$worktree" "$model" "$reasoning" "$session_id" "$prompt_file" "$log_file" "$output_file"; then
-    dayflow_block_issue "$issue_json" "$DAYFLOW_EXECUTION_ERROR"
-    return 1
-  fi
-  if [[ "$mode" == "primary-new" ]]; then
-    session_id="$(dayflow_jsonl_session_id "$log_file")"
-    [[ -n "$session_id" ]] || {
-      dayflow_block_issue "$issue_json" 'Codex completed without a resumable session id.'
+  if [[ "$publication_recovery" != "true" ]]; then
+    if [[ "$requested_changes_recovery" == "true" ]]; then
+      {
+        printf 'Address only the current GitHub requested changes below in the existing session. Make a concrete issue-scoped worktree change, run focused tests, and return the required structured test-evidence JSON. Do not stage, commit, push, use gh, or change lifecycle state.\n\n'
+        jq '.requested_changes' "$(dayflow_state_file "$issue_key")"
+      } >"$prompt_file"
+    else
+      dayflow_issue_prompt "$issue_json" "$primary" >"$prompt_file"
+    fi
+    if ! dayflow_execute_bounded "$issue_key" "$mode" "$worktree" "$model" "$reasoning" "$session_id" "$prompt_file" "$log_file" "$output_file"; then
+      dayflow_block_issue "$issue_json" "$DAYFLOW_EXECUTION_ERROR"
       return 1
-    }
-    dayflow_state_update "$issue_key" --arg session "$session_id" '.session_id = $session'
+    fi
+    if [[ "$mode" == "primary-new" ]]; then
+      session_id="$(dayflow_jsonl_session_id "$log_file")"
+      [[ -n "$session_id" ]] || {
+        dayflow_block_issue "$issue_json" 'Codex completed without a resumable session id.'
+        return 1
+      }
+      dayflow_state_update "$issue_key" --arg session "$session_id" '.session_id = $session'
+    fi
+    if [[ "$requested_changes_recovery" == "true" && -z "$(git -C "$worktree" status --porcelain --untracked-files=normal)" ]]; then
+      dayflow_block_issue "$issue_json" 'Requested-changes remediation produced no worktree change.'
+      return 1
+    fi
+    if ! dayflow_store_test_evidence "$issue_key" "$output_file" "$([[ "$requested_changes_recovery" == "true" ]] && printf 'Current GitHub requested changes were addressed in the persisted primary session.' || printf 'Not applicable before automated review.')"; then
+      dayflow_block_issue "$issue_json" 'Primary session returned missing, malformed, or failed test evidence.'
+      return 1
+    fi
   fi
 
-  if ! pr_json="$(dayflow_validate_delivery "$issue_key" "$branch" "$worktree")"; then
-    dayflow_block_issue "$issue_json" 'Primary agent did not produce a valid pushed develop PR with proof.'
+  if ! pr_json="$(dayflow_publish_issue_changes "$issue_json" "$branch" "$worktree")"; then
+    if [[ "$(dayflow_state_value "$issue_key" '.publication.failure // ""')" == "unsafe" ]]; then
+      dayflow_block_issue "$issue_json" 'Deterministic publication integrity validation failed.'
+    else
+      dayflow_mark_publication_retry "$issue_key" 'Deterministic publication failed after the primary edit/test session.'
+    fi
     return 1
   fi
   pr_number="$(jq -r '.number' <<<"$pr_json")"
@@ -1250,15 +1729,23 @@ dayflow_run_issue() {
     remediation_log="$DAYFLOW_LOG_ROOT/${issue_key}-${timestamp}-remediation.jsonl"
     remediation_output="$DAYFLOW_LOG_ROOT/${issue_key}-${timestamp}-remediation.out"
     {
-      printf 'Address all P0-P2 review findings below. Re-run relevant tests, commit, push, and refresh the existing PR proof. Do not open a second PR.\n\n'
+      printf 'Address only the P0-P2 review findings below, then re-run focused tests. Edit/test only: do not stage, commit, push, use gh, update proof, or change lifecycle state. Do not dump whole files, logs, trees, or repository diffs. The deterministic runner owns publication.\n\n'
       jq '.' "$review_output"
     } >"$remediation_prompt"
     if ! dayflow_execute_bounded "$issue_key" primary-resume "$worktree" "$model" "$reasoning" "$session_id" "$remediation_prompt" "$remediation_log" "$remediation_output"; then
       dayflow_block_issue "$issue_json" "$DAYFLOW_EXECUTION_ERROR"
       return 1
     fi
-    pr_json="$(dayflow_validate_delivery "$issue_key" "$branch" "$worktree")" || {
-      dayflow_block_issue "$issue_json" 'Review remediation did not preserve a valid delivery.'
+    if ! dayflow_store_test_evidence "$issue_key" "$remediation_output" 'Automated P0-P2 findings were addressed in one bounded remediation session.'; then
+      dayflow_block_issue "$issue_json" 'Review remediation returned missing, malformed, or failed test evidence.'
+      return 1
+    fi
+    pr_json="$(dayflow_publish_issue_changes "$issue_json" "$branch" "$worktree" 'Automated P0-P2 findings were addressed in one bounded remediation session.')" || {
+      if [[ "$(dayflow_state_value "$issue_key" '.publication.failure // ""')" == "unsafe" ]]; then
+        dayflow_block_issue "$issue_json" 'Deterministic remediation publication integrity validation failed.'
+      else
+        dayflow_mark_publication_retry "$issue_key" 'Deterministic publication failed after review remediation.'
+      fi
       return 1
     }
     review_round=$((review_round + 1))

@@ -38,8 +38,10 @@ invalid="$(<"$TEST_DIR/fixtures/invalid-issue.json")"
 assert_success 'admissible fixture should pass' dayflow_validate_admission "$admissible"
 assert_failure 'invalid fixture should fail admission' dayflow_validate_admission "$invalid"
 primary_prompt="$(dayflow_issue_prompt "$admissible" integration-agent)"
-assert_success 'primary prompt requires a draft PR' grep -Fq 'a draft PR targeting develop' <<<"$primary_prompt"
-assert_success 'primary prompt reserves ready transition for runner' grep -Fq 'Do not mark the PR ready' <<<"$primary_prompt"
+assert_success 'primary prompt limits model to edit and test' grep -Fq 'Edit and test only' <<<"$primary_prompt"
+assert_success 'primary prompt reserves Git publication for runner' grep -Fq 'Do not run git add, git commit, git push' <<<"$primary_prompt"
+assert_success 'primary prompt prohibits repository dumps' grep -Fq 'Never print or request a full repository tree' <<<"$primary_prompt"
+assert_success 'primary prompt contains narrow input reference' grep -Fq 'docs/automation-model.md' <<<"$primary_prompt"
 
 assert_eq 'gpt-5.6-sol high' "$(dayflow_model_for_agent integration-agent)" 'integration routing'
 assert_eq 'gpt-5.6-sol high' "$(dayflow_model_for_agent product-agent)" 'product routing'
@@ -56,17 +58,29 @@ dayflow_release_lock
 
 usage_log="$TEST_TMP/usage.jsonl"
 cat >"$usage_log" <<'EOF'
-{"usage":{"input_tokens":2,"output_tokens":3}}
-{"event":{"usage":{"totalTokens":7}}}
-{"item":{"usage":{"prompt_tokens":5,"completion_tokens":6}}}
+{"usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10}}
+{"usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10}}
+{"event":{"usage":{"input_tokens":200,"cached_input_tokens":150,"output_tokens":20}}}
 EOF
-assert_eq '23' "$(dayflow_jsonl_tokens "$usage_log")" 'live token usage shapes'
+assert_eq '220' "$(dayflow_jsonl_tokens "$usage_log")" 'repeated cumulative usage snapshots are not summed'
+assert_eq '150' "$(dayflow_jsonl_usage "$usage_log" | jq -r '.cached_input_tokens')" 'cached cumulative usage'
+assert_eq '50' "$(dayflow_jsonl_usage "$usage_log" | jq -r '.uncached_input_tokens')" 'uncached cumulative usage'
 
-current_branch="$(git -C "$ROOT_DIR" branch --show-current)"
-printf '%s\n' "{\"worktree\":\"$ROOT_DIR\",\"session_id\":\"session\",\"primary_agent\":\"integration-agent\",\"model\":\"gpt-5.6-sol\",\"reasoning\":\"high\"}" \
+resume_repo="$TEST_TMP/resume-repo"
+mkdir -p "$resume_repo"
+git -C "$resume_repo" init -b test >/dev/null
+git -C "$resume_repo" config user.name 'DayFlow Tests'
+git -C "$resume_repo" config user.email 'dayflow@example.invalid'
+printf '%s\n' clean >"$resume_repo/README.md"
+git -C "$resume_repo" add README.md
+git -C "$resume_repo" commit -m seed >/dev/null
+current_branch="$(git -C "$resume_repo" branch --show-current)"
+printf '%s\n' "{\"worktree\":\"$resume_repo\",\"session_id\":\"session\",\"primary_agent\":\"integration-agent\",\"model\":\"gpt-5.6-sol\",\"reasoning\":\"high\"}" \
   >"$DAYFLOW_STATE_ROOT/CEN-40.json"
 assert_success 'matching resume ownership' dayflow_validate_resume_state CEN-40 "$current_branch" integration-agent gpt-5.6-sol high
 assert_failure 'resume ownership drift must fail' dayflow_validate_resume_state CEN-40 "$current_branch" backend-agent gpt-5.6-terra medium
+printf '%s\n' dirty >>"$resume_repo/README.md"
+assert_failure 'dirty resume worktree fails closed' dayflow_validate_resume_state CEN-40 "$current_branch" integration-agent gpt-5.6-sol high
 mkdir "$DAYFLOW_STATE_ROOT/CEN-29.lock"
 printf '%s\n' '999999' >"$DAYFLOW_STATE_ROOT/CEN-29.lock/pid"
 assert_success 'stale lock recovery' dayflow_acquire_lock CEN-29
@@ -104,6 +118,37 @@ if dayflow_execute_bounded CEN-33 primary-new "$ROOT_DIR" fake-model medium '' "
   test_fail 'successful fast exit at token cap should fail'
 fi
 assert_eq 'token limit exceeded after process exit (10)' "$DAYFLOW_EXECUTION_ERROR" 'post-wait token boundary'
+
+printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-35.json"
+export FAKE_CODEX_MODE=late-usage
+DAYFLOW_TOKEN_LIMIT=1000
+if ! dayflow_execute_bounded CEN-35 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/late.jsonl" "$output"; then
+  test_fail 'late final usage should remain within the test limit'
+fi
+assert_eq '220' "$(jq -r '.tokens_used' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'late final usage persisted after process exit'
+assert_eq '150' "$(jq -r '.usage.cached_input_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'late cached usage persisted'
+assert_eq '50' "$(jq -r '.usage.uncached_input_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'late uncached usage persisted'
+
+printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-36.json"
+oversized_prompt="$TEST_TMP/oversized-prompt"
+printf '%040d\n' 0 >"$oversized_prompt"
+DAYFLOW_PROMPT_LIMIT_BYTES=16
+export FAKE_CODEX_INVOCATION_COUNT_FILE="$TEST_TMP/prompt-limit-count"
+if dayflow_execute_bounded CEN-36 primary-new "$ROOT_DIR" fake-model medium '' "$oversized_prompt" "$TEST_TMP/prompt-limit.jsonl" "$output"; then
+  test_fail 'oversized prompt should fail before Codex launch'
+fi
+assert_failure 'prompt limit must not invoke Codex' test -e "$FAKE_CODEX_INVOCATION_COUNT_FILE"
+DAYFLOW_PROMPT_LIMIT_BYTES=32768
+unset FAKE_CODEX_INVOCATION_COUNT_FILE
+
+printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-37.json"
+export FAKE_CODEX_MODE=output-limit
+DAYFLOW_LOG_LIMIT_BYTES=512
+if dayflow_execute_bounded CEN-37 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/output-limit.jsonl" "$output"; then
+  test_fail 'command output limit should stop Codex'
+fi
+assert_eq 'command output limit exceeded (512 bytes)' "$DAYFLOW_EXECUTION_ERROR" 'command output bound reason'
+DAYFLOW_LOG_LIMIT_BYTES=5242880
 
 printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-30.json"
 export FAKE_CODEX_MODE=stall
