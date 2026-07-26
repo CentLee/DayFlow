@@ -1,0 +1,6 @@
+{
+  "issues": [
+    {"identifier":"CEN-50","title":"cycle a","description":"","priority":1,"state":"Todo","blockers":[{"identifier":"CEN-51","state":"Todo"}]},
+    {"identifier":"CEN-51","title":"cycle b","description":"","priority":1,"state":"Todo","blockers":[{"identifier":"CEN-50","state":"Todo"}]}
+  ]
+}

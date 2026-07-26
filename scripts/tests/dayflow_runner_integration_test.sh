@@ -8,8 +8,73 @@ source "$TEST_DIR/testlib.sh"
 # shellcheck source=scripts/tests/system_test_helpers.sh
 source "$TEST_DIR/system_test_helpers.sh"
 
-run_review_remediation_test() {
+run_commit_then_push_recovery_test() {
+  local test_root seed hook worktree
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  export FAKE_CODEX_MODE=success FAKE_REVIEW_MODE=clean
+  export FAKE_CODEX_PRIMARY_COUNT_FILE="$test_root/primary-count"
+  hook="$test_root/remote.git/hooks/pre-receive"
+  printf '%s\n' '#!/bin/sh' 'exit 1' >"$hook"
+  chmod +x "$hook"
+  if "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null 2>&1; then
+    test_fail 'push rejection should leave publication retry state'
+  fi
+  assert_eq 'committed' "$(jq -r '.publication.phase' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'commit phase persisted before push failure'
+  rm -f "$hook"
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
+  assert_eq '1' "$(<"$FAKE_CODEX_PRIMARY_COUNT_FILE")" 'push retry invokes no additional primary model'
+  worktree="$(jq -r '.worktree' "$DAYFLOW_STATE_ROOT/CEN-29.json")"
+  assert_eq '1' "$(git -C "$worktree" rev-list --count origin/develop..HEAD)" 'push retry creates no duplicate commit'
+  assert_eq 'merge-ready' "$(jq -r '.status' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'push retry completes review lifecycle'
+  rm -rf "$test_root"
+}
+
+run_push_then_pr_recovery_test() {
+  local test_root seed worktree
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  export FAKE_CODEX_MODE=success FAKE_REVIEW_MODE=clean
+  export FAKE_CODEX_PRIMARY_COUNT_FILE="$test_root/primary-count"
+  export FAKE_GH_PR_CREATED_FILE="$test_root/pr-created"
+  export FAKE_GH_CREATE_FAIL_FILE="$test_root/fail-create-once"
+  : >"$FAKE_GH_CREATE_FAIL_FILE"
+  if "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null 2>&1; then
+    test_fail 'PR creation rejection should leave publication retry state'
+  fi
+  assert_eq 'pushed' "$(jq -r '.publication.phase' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'push phase persisted before PR failure'
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
+  assert_eq '1' "$(<"$FAKE_CODEX_PRIMARY_COUNT_FILE")" 'PR retry invokes no additional primary model'
+  worktree="$(jq -r '.worktree' "$DAYFLOW_STATE_ROOT/CEN-29.json")"
+  assert_eq '1' "$(git -C "$worktree" rev-list --count origin/develop..HEAD)" 'PR retry creates no duplicate commit'
+  assert_eq '2' "$(rg -c 'pr create' "$FAKE_GH_LOG")" 'PR retry occurs once after one definite creation failure'
+  assert_success 'PR retry converges to one created PR state' test -f "$FAKE_GH_PR_CREATED_FILE"
+  assert_eq 'merge-ready' "$(jq -r '.status' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'PR retry completes review lifecycle'
+  rm -rf "$test_root"
+}
+
+run_missing_test_evidence_test() {
   local test_root seed
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  export FAKE_CODEX_MODE=success FAKE_REVIEW_MODE=clean FAKE_TEST_EVIDENCE_MODE=missing
+  if "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null 2>&1; then
+    test_fail 'missing structured test evidence must block publication'
+  fi
+  assert_eq 'blocked' "$(jq -r '.status' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'missing test evidence blocks issue'
+  assert_failure 'missing test evidence creates no commit' git -C "$DAYFLOW_WORKTREE_ROOT/CEN-29" rev-parse HEAD^ >/dev/null 2>&1
+  assert_failure 'missing test evidence creates no PR' rg -q 'pr create\|pr edit' "$FAKE_GH_LOG"
+  rm -rf "$test_root"
+}
+
+run_review_remediation_test() {
+  local test_root seed worktree commit_count
   test_root="$(mktemp -d)"
   seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
   dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
@@ -26,6 +91,32 @@ run_review_remediation_test() {
   assert_file_contains "$FAKE_GH_COMMENTS_LOG" 'Proof needs refresh' 'blocking review was published'
   assert_file_contains "$FAKE_GH_COMMENTS_LOG" 'Outcome:.*passed' 'clean rereview was published'
   assert_success 'clean rereview returned PR to ready' test -f "$FAKE_GH_READY_FILE"
+  worktree="$(jq -r '.worktree' "$DAYFLOW_STATE_ROOT/CEN-29.json")"
+  commit_count="$(git -C "$worktree" rev-list --count origin/develop..HEAD)"
+  assert_eq '2' "$commit_count" 'runner owns primary and remediation commits'
+  assert_file_contains <(git -C "$worktree" log --format=%s origin/develop..HEAD) '^feat\(CEN-29\):' 'runner-generated commit subject'
+  assert_file_contains "$FAKE_GH_LOG" "GH_CONFIG_DIR=$DAYFLOW_RUNTIME_DIR/gh :: auth status" 'canonical GitHub auth reaches issue worktree publication'
+  assert_file_contains "$FAKE_GH_LOG" 'pr edit' 'runner owns PR proof publication'
+  assert_file_contains "$FAKE_CODEX_LOG" 'mcp_servers=\{\}' 'irrelevant MCP startup disabled'
+  assert_failure 'model never receives danger-full-access' rg -q 'danger-full-access' "$FAKE_CODEX_LOG"
+  rm -rf "$test_root"
+}
+
+run_publication_preflight_failure_test() {
+  local test_root seed
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  export FAKE_GH_AUTH_FAIL=true
+  export FAKE_CODEX_INVOCATION_COUNT_FILE="$test_root/invocations"
+
+  if "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null 2>&1; then
+    test_fail 'missing GitHub publication capability must fail before model launch'
+  fi
+  assert_eq 'pre-session-blocked' "$(jq -r '.status' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'publication preflight recovery state'
+  assert_failure 'publication preflight failure must not invoke Codex' test -e "$FAKE_CODEX_INVOCATION_COUNT_FILE"
+  assert_file_contains "$FAKE_GH_LOG" "GH_CONFIG_DIR=$DAYFLOW_RUNTIME_DIR/gh :: auth status" 'preflight uses canonical GitHub auth directory'
   rm -rf "$test_root"
 }
 
@@ -289,20 +380,190 @@ run_model_rejection_test() {
   assert_file_contains "$DAYFLOW_STATE_ROOT/CEN-29.json" 'model rejected' 'model rejection reason'
   assert_file_contains "$FAKE_CURL_LOG" 'state-blocked' 'Linear Blocked mutation'
   assert_file_contains "$FAKE_CURL_LOG" 'discord.test/webhook' 'Blocked webhook'
+  assert_failure 'failed primary run must not launch review' test -e "$FAKE_CODEX_REVIEW_COUNT_FILE"
   rm -rf "$test_root"
 }
 
-run_review_remediation_test
-run_model_rejection_test
-run_delivery_integrity_test
-run_review_execution_failure_draft_test
-run_start_transition_failure_test
-run_review_visibility_test
-run_final_blocker_visibility_test
-run_ci_timeout_test
-run_webhook_retry_and_lock_test
-run_merged_base_integrity_test
-run_merged_reviewed_head_integrity_test
-run_merged_linear_done_rejection_test
-run_cross_issue_merge_ready_store_lock_test
+run_publication_recovery_preflight_preservation_test() {
+  local test_root seed hook before after
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  export FAKE_CODEX_MODE=success FAKE_REVIEW_MODE=clean FAKE_CODEX_PRIMARY_COUNT_FILE="$test_root/primary-count"
+  hook="$test_root/remote.git/hooks/pre-receive"
+  printf '%s\n' '#!/bin/sh' 'exit 1' >"$hook"
+  chmod +x "$hook"
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null 2>&1 || true
+  rm -f "$hook"
+  before="$(jq -c '{session_id,publication,test_evidence}' "$DAYFLOW_STATE_ROOT/CEN-29.json")"
+  export FAKE_GH_AUTH_FAIL=true
+  assert_failure 'publication recovery preflight failure returns safely' "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29
+  after="$(jq -c '{session_id,publication,test_evidence}' "$DAYFLOW_STATE_ROOT/CEN-29.json")"
+  assert_eq 'publication-retry' "$(jq -r '.status' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'preflight failure preserves publication retry status'
+  assert_eq "$before" "$after" 'preflight failure preserves session phase head and evidence'
+  assert_eq '1' "$(<"$FAKE_CODEX_PRIMARY_COUNT_FILE")" 'preflight recovery failure invokes no primary model'
+  unset FAKE_GH_AUTH_FAIL
+  rm -rf "$test_root"
+}
+
+run_requested_changes_auto_resume_test() {
+  local test_root seed state_file worktree commits
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  export FAKE_CODEX_MODE=success FAKE_REVIEW_MODE=clean FAKE_CODEX_PRIMARY_COUNT_FILE="$test_root/primary-count"
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
+  export FAKE_GH_REQUESTED_CHANGES=true FAKE_GH_REQUESTED_BODY='Change the focused fixture behavior.'
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" reconcile CEN-29 >/dev/null
+  state_file="$DAYFLOW_STATE_ROOT/CEN-29.json"
+  assert_eq 'review-changes' "$(jq -r '.status' "$state_file")" 'requested changes persisted for auto resume'
+  assert_eq 'Change the focused fixture behavior.' "$(jq -r '.requested_changes.reviews[0].body' "$state_file")" 'current requested-change body persisted'
+  assert_eq "$(jq -r '.reviewed_head_sha' "$state_file")" "$(jq -r '.requested_changes.reviewed_head_sha' "$state_file")" 'requested changes persist reviewed head'
+  unset FAKE_GH_REQUESTED_CHANGES
+  export FAKE_CODEX_PROMPT_LOG="$test_root/requested.prompt"
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
+  assert_file_contains "$FAKE_CODEX_PROMPT_LOG" 'Change the focused fixture behavior' 'auto-resume prompt includes current requested feedback'
+  assert_file_contains "$FAKE_CODEX_LOG" 'resume.*fake-primary-session' 'requested changes reuse the primary session'
+  assert_eq '2' "$(<"$FAKE_CODEX_PRIMARY_COUNT_FILE")" 'requested changes invoke one remediation primary turn'
+  worktree="$(jq -r '.worktree' "$state_file")"
+  commits="$(git -C "$worktree" rev-list --count origin/develop..HEAD)"
+  assert_eq '2' "$commits" 'requested changes publish a new remediation commit'
+  rm -rf "$test_root"
+}
+
+run_requested_changes_no_change_test() {
+  local test_root seed worktree
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  export FAKE_CODEX_MODE=success FAKE_REVIEW_MODE=clean
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
+  export FAKE_GH_REQUESTED_CHANGES=true
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" reconcile CEN-29 >/dev/null
+  unset FAKE_GH_REQUESTED_CHANGES
+  export FAKE_CODEX_NO_CHANGE=true
+  assert_failure 'requested changes no-op blocks safely' "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29
+  assert_eq 'blocked' "$(jq -r '.status' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'requested changes no-op is blocked'
+  worktree="$(jq -r '.worktree' "$DAYFLOW_STATE_ROOT/CEN-29.json")"
+  assert_eq '1' "$(git -C "$worktree" rev-list --count origin/develop..HEAD)" 'requested changes no-op does not republish old commit'
+  rm -rf "$test_root"
+}
+
+run_unsafe_publication_case() {
+  local kind="$1"
+  local test_root seed hook state_file worktree tmp
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  export FAKE_CODEX_MODE=success FAKE_REVIEW_MODE=clean
+  hook="$test_root/remote.git/hooks/pre-receive"
+  printf '%s\n' '#!/bin/sh' 'exit 1' >"$hook"
+  chmod +x "$hook"
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null 2>&1 || true
+  rm -f "$hook"
+  state_file="$DAYFLOW_STATE_ROOT/CEN-29.json"
+  worktree="$(jq -r '.worktree' "$state_file")"
+  case "$kind" in
+    invalid-phase) tmp="$state_file.tmp"; jq '.publication.phase = "invalid"' "$state_file" >"$tmp"; mv "$tmp" "$state_file" ;;
+    dirty-post-commit) printf '%s\n' dirty >>"$worktree/runner-result.txt" ;;
+    mismatched-commit)
+      git -C "$worktree" commit --allow-empty -m 'wrong publication subject' >/dev/null
+      tmp="$state_file.tmp"; jq '.publication.phase = "edited"' "$state_file" >"$tmp"; mv "$tmp" "$state_file"
+      ;;
+  esac
+  assert_failure "$kind publication invariant fails" "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29
+  assert_eq 'blocked' "$(jq -r '.status' "$state_file")" "$kind is classified unsafe and blocked"
+  assert_eq 'unsafe' "$(jq -r '.publication.failure' "$state_file")" "$kind persists unsafe classification"
+  rm -rf "$test_root"
+}
+
+run_owned_recovery_gate_case() {
+  local recovery_mode="$1"
+  local failure_gate="$2"
+  local test_root seed hook state_file original preserved session_id expected_primary_count
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  export FAKE_CODEX_MODE=success FAKE_REVIEW_MODE=clean FAKE_CODEX_PRIMARY_COUNT_FILE="$test_root/primary-count"
+
+  if [[ "$recovery_mode" == "publication-retry" ]]; then
+    hook="$test_root/remote.git/hooks/pre-receive"
+    printf '%s\n' '#!/bin/sh' 'exit 1' >"$hook"
+    chmod +x "$hook"
+    "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null 2>&1 || true
+    rm -f "$hook"
+    expected_primary_count=1
+  else
+    "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
+    export FAKE_GH_REQUESTED_CHANGES=true FAKE_GH_REQUESTED_BODY='Preserve this requested-change feedback.'
+    "$SOURCE_ROOT/scripts/dayflow_runner.sh" reconcile CEN-29 >/dev/null
+    unset FAKE_GH_REQUESTED_CHANGES
+    expected_primary_count=2
+  fi
+
+  state_file="$DAYFLOW_STATE_ROOT/CEN-29.json"
+  assert_eq "$recovery_mode" "$(jq -r '.status' "$state_file")" "$recovery_mode fixture enters owned recovery"
+  session_id="$(jq -r '.session_id' "$state_file")"
+  original="$(jq -Sc 'del(.last_error,.updated_at)' "$state_file")"
+  if [[ "$failure_gate" == "preflight" ]]; then
+    export FAKE_GH_AUTH_FAIL=true
+  else
+    export FAKE_LINEAR_FAIL_STATE=state-in-progress
+  fi
+  assert_failure "$recovery_mode $failure_gate gate failure returns" "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29
+  preserved="$(jq -Sc 'del(.last_error,.updated_at)' "$state_file")"
+  assert_eq "$original" "$preserved" "$recovery_mode $failure_gate preserves exact owned recovery state"
+
+  unset FAKE_GH_AUTH_FAIL FAKE_LINEAR_FAIL_STATE
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
+  assert_eq "$session_id" "$(jq -r '.session_id' "$state_file")" "$recovery_mode $failure_gate later retry preserves primary session"
+  assert_eq "$expected_primary_count" "$(<"$FAKE_CODEX_PRIMARY_COUNT_FILE")" "$recovery_mode $failure_gate later retry creates no new primary session"
+  assert_eq 'merge-ready' "$(jq -r '.status' "$state_file")" "$recovery_mode $failure_gate later retry completes"
+  if [[ "$recovery_mode" == "review-changes" ]]; then
+    assert_file_contains "$FAKE_CODEX_LOG" 'resume.*fake-primary-session' "$recovery_mode $failure_gate uses same-session resume"
+  fi
+  rm -rf "$test_root"
+}
+
+if [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "locks" ]]; then
+  run_webhook_retry_and_lock_test
+elif [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "owned-recovery-gates" ]]; then
+  run_owned_recovery_gate_case publication-retry preflight
+  run_owned_recovery_gate_case publication-retry linear
+  run_owned_recovery_gate_case review-changes preflight
+  run_owned_recovery_gate_case review-changes linear
+else
+  run_commit_then_push_recovery_test
+  run_push_then_pr_recovery_test
+  run_missing_test_evidence_test
+  run_publication_recovery_preflight_preservation_test
+  run_requested_changes_auto_resume_test
+  run_requested_changes_no_change_test
+  run_unsafe_publication_case invalid-phase
+  run_unsafe_publication_case dirty-post-commit
+  run_unsafe_publication_case mismatched-commit
+  run_owned_recovery_gate_case publication-retry preflight
+  run_owned_recovery_gate_case publication-retry linear
+  run_owned_recovery_gate_case review-changes preflight
+  run_owned_recovery_gate_case review-changes linear
+  run_review_remediation_test
+  run_publication_preflight_failure_test
+  run_model_rejection_test
+  run_delivery_integrity_test
+  run_review_execution_failure_draft_test
+  run_start_transition_failure_test
+  run_review_visibility_test
+  run_final_blocker_visibility_test
+  run_ci_timeout_test
+  run_webhook_retry_and_lock_test
+  run_merged_base_integrity_test
+  run_merged_reviewed_head_integrity_test
+  run_merged_linear_done_rejection_test
+  run_cross_issue_merge_ready_store_lock_test
+fi
 finish_tests 'dayflow_runner_integration_test'

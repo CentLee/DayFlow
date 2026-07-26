@@ -93,6 +93,7 @@ Do not spend top-tier model budget on deterministic or repetitive implementation
 ## Phase 4: Handoff Rules
 
 - do not fan out multiple agents in parallel inside one issue
+- default queue dispatch to one issue; allow two only when both issues explicitly declare `Parallel Safe` and nonoverlapping, non-empty `Write Scope` values
 - use sequential handoff when an issue needs more than one agent lens
 - keep budget privacy and calendar sharing boundaries explicit throughout the flow
 - preserve the same lifecycle owner through review follow-up unless the issue is explicitly re-scoped
@@ -107,6 +108,11 @@ When working on the harness itself:
 - keep local-only machine configuration out of git
 - use `scripts/audit_harness_drift.sh` when checking repo-level harness alignment
 - use `scripts/dayflow_runner.sh` for issue execution, status, and reconciliation
+- use `scripts/dayflow_supervisor.sh once` for dependency-aware queue pickup; `start` securely persists the launchd credential/PATH runtime under canonical `.dayflow/`, and `stop` unloads the scheduled job
+- require all blockers `Done` before supervisor pickup, preserve PID locks and claims across unsafe restarts, and keep CEN-28 outside automated cleanup
+- prioritize valid locally owned review remediation or publication retry before new `Todo`, without adopting unrelated active Linear work
+- require structured passed-test evidence before publication and keep lifecycle credentials out of Codex subprocesses
+- do not add a Symphony dependency, resident HTTP service, or port 4100 listener
 
 ## Completion Standard
 

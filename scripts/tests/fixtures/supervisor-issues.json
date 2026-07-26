@@ -1,0 +1,40 @@
+{
+  "issues": [
+    {
+      "id": "issue-40",
+      "identifier": "CEN-40",
+      "title": "[Integration] Dependency eligible",
+      "description": "Parallel Safe: yes\n\nWrite Scope:\n- scripts/queue-a/**",
+      "priority": 2,
+      "state": "Todo",
+      "blockers": [{"identifier": "CEN-39", "state": "Done"}]
+    },
+    {
+      "id": "issue-41",
+      "identifier": "CEN-41",
+      "title": "[Integration] Highest priority",
+      "description": "Parallel Safe: yes\n\nWrite Scope:\n- docs/queue-b/**",
+      "priority": 1,
+      "state": "Todo",
+      "blockers": []
+    },
+    {
+      "id": "issue-42",
+      "identifier": "CEN-42",
+      "title": "[Integration] Still blocked",
+      "description": "Write Scope:\n- scripts/blocked/**",
+      "priority": 1,
+      "state": "Todo",
+      "blockers": [{"identifier": "CEN-43", "state": "Todo"}]
+    },
+    {
+      "id": "issue-43",
+      "identifier": "CEN-43",
+      "title": "[Integration] Sequential fallback",
+      "description": "Write Scope:\n- scripts/sequential/**",
+      "priority": 3,
+      "state": "Todo",
+      "blockers": []
+    }
+  ]
+}

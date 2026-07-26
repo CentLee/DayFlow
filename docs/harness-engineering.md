@@ -10,7 +10,7 @@ Compare agent definitions, skills, issue metadata, runner behavior, CI, and docs
 
 ### One Lifecycle Owner
 
-Each issue has one Primary Agent. Sequential integration or review handoff is allowed; parallel fan-out is not the default. The owner returns for review remediation on the same session and branch.
+Each issue has one Primary Agent. Sequential integration or review handoff is allowed, and queue dispatch is sequential by default. At most two separate issues may overlap only when each is explicitly `Parallel Safe` with a non-empty, nonoverlapping `Write Scope`. The owner returns for review remediation on the same session and branch.
 
 ### Models Follow Leverage
 
@@ -19,6 +19,8 @@ Use `gpt-5.6-sol/high` for product, integration, and review decisions. Use `gpt-
 ### Fail Closed and Preserve Work
 
 Admission, ownership, model, token, time, delivery, and review guards stop unsafe continuation. They do not erase worktrees or silently retry. Recovery is an explicit operator action.
+
+Publication transport recovery is the bounded exception: persisted deterministic phases may resume commit publication, push, or PR creation without invoking Codex again. Integrity mismatches still fail closed. Model output contributes only validated structured test evidence; lifecycle code never executes model-provided commands and model subprocesses receive no lifecycle credentials.
 
 ### Progressive Disclosure
 
@@ -36,6 +38,8 @@ Only logic and policy are tracked. Credentials, sessions, worktrees, logs, dedup
 4. Run `scripts/tests/run_dayflow_runner_tests.sh` and relevant product tests.
 5. Apply `docs/review-checklist.md` before declaring merge readiness.
 
+Keep the supervisor as a one-shot dependency-aware cycle. Supported unattended pickup uses `start` to atomically persist only the required credential and effective PATH in canonical ignored state with mode `0600`; launchd loads that file before the supervisor library and never sources interactive shell startup files. Do not add secrets to the plist, logs, status output, or git, and do not add a resident service, local HTTP control plane, Symphony dependency, or port 4100 listener. Queue selection must remain deterministic and must delegate issue execution and resource enforcement to the runner.
+
 ## Required Repository Truth
 
 - `AGENTS.md`
@@ -45,12 +49,12 @@ Only logic and policy are tracked. Credentials, sessions, worktrees, logs, dedup
 - `docs/git-tracking-policy.md`
 - `docs/review-checklist.md`
 - `.codex/agents/` and `.codex/skills/`
-- `scripts/dayflow_runner.sh`, its library, tests, and drift audit
+- `scripts/dayflow_runner.sh`, `scripts/dayflow_supervisor.sh`, their libraries, tests, and drift audit
 
 ## Non-Goals
 
 - a generic multi-project orchestration platform
-- resident local services for issue pickup
+- resident local services or HTTP listeners for issue pickup
 - hidden machine-only patches
 - automated merging without human approval
 - agent taxonomies larger than the MVP needs
