@@ -2,6 +2,7 @@ package systemtest
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -58,6 +59,93 @@ func TestSystemInviteFlow(t *testing.T) {
 	defer acceptResp.Body.Close()
 	if acceptResp.StatusCode != http.StatusForbidden {
 		t.Fatalf("expected 403 for mismatched invite target, got %d", acceptResp.StatusCode)
+	}
+}
+
+func TestSystemInviteRegistrationCompletesAtomically(t *testing.T) {
+	client, baseURL := systemClient(t)
+	ownerToken := loginToken(t, client, baseURL, "owner@dayflow.local", "secret1234")
+	email := fmt.Sprintf("registration-%d@dayflow.local", time.Now().UnixNano())
+
+	createInviteResp := authedJSONRequest(t, client, ownerToken, http.MethodPost, baseURL+"/v1/calendars/cal_002/invites", map[string]any{
+		"email":            email,
+		"delivery_channel": "email",
+		"role":             "viewer",
+	})
+	if createInviteResp.StatusCode != http.StatusCreated {
+		createInviteResp.Body.Close()
+		t.Fatalf("create invite: expected 201, got %d", createInviteResp.StatusCode)
+	}
+	var invite struct {
+		InviteCode string `json:"invite_code"`
+	}
+	decodeResponse(t, createInviteResp, &invite)
+
+	failedRegistrationResp := mustRequest(t, client, http.MethodPost, baseURL+"/v1/auth/register", "", map[string]any{
+		"email":        "other-" + email,
+		"display_name": "Wrong Recipient",
+		"password":     "secret1234",
+		"invite_code":  invite.InviteCode,
+	})
+	defer failedRegistrationResp.Body.Close()
+	if failedRegistrationResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("mismatched registration: expected 403, got %d", failedRegistrationResp.StatusCode)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	registrationResp := requestWithContext(t, client, ctx, http.MethodPost, baseURL+"/v1/auth/register", "", map[string]any{
+		"email":        email,
+		"display_name": "Postgres Invitee",
+		"password":     "secret1234",
+		"invite_code":  invite.InviteCode,
+	})
+	if registrationResp.StatusCode != http.StatusCreated {
+		registrationResp.Body.Close()
+		t.Fatalf("registration: expected 201 before deadline, got %d", registrationResp.StatusCode)
+	}
+	var registration struct {
+		User struct {
+			ID string `json:"id"`
+		} `json:"user"`
+		Token string `json:"token"`
+	}
+	decodeResponse(t, registrationResp, &registration)
+	if registration.User.ID == "" || registration.Token == "" {
+		t.Fatalf("expected registered user and session token, got %#v", registration)
+	}
+
+	meResp := authedJSONRequest(t, client, registration.Token, http.MethodGet, baseURL+"/v1/me", nil)
+	if meResp.StatusCode != http.StatusOK {
+		meResp.Body.Close()
+		t.Fatalf("authenticated session: expected 200, got %d", meResp.StatusCode)
+	}
+	var me struct {
+		PersonalCalendar struct {
+			Kind string `json:"kind"`
+		} `json:"personal_calendar"`
+		SharedCalendars []struct {
+			ID string `json:"id"`
+		} `json:"shared_calendars"`
+	}
+	decodeResponse(t, meResp, &me)
+	if me.PersonalCalendar.Kind != "personal" || !containsCalendar(me.SharedCalendars, "cal_002") {
+		t.Fatalf("expected personal calendar and accepted shared membership, got %#v", me)
+	}
+
+	previewResp := mustRequest(t, client, http.MethodGet, baseURL+"/v1/invites/"+invite.InviteCode, "", nil)
+	if previewResp.StatusCode != http.StatusOK {
+		previewResp.Body.Close()
+		t.Fatalf("accepted invite preview: expected 200, got %d", previewResp.StatusCode)
+	}
+	var preview struct {
+		Invite struct {
+			AcceptedByUserID string `json:"accepted_by_user_id"`
+			AcceptedAt       string `json:"accepted_at"`
+		} `json:"invite"`
+	}
+	decodeResponse(t, previewResp, &preview)
+	if preview.Invite.AcceptedByUserID != registration.User.ID || preview.Invite.AcceptedAt == "" {
+		t.Fatalf("expected accepted invite metadata for %q, got %#v", registration.User.ID, preview.Invite)
 	}
 }
 
@@ -207,6 +295,11 @@ func authedJSONRequest(t *testing.T, client *http.Client, token, method, url str
 
 func mustRequest(t *testing.T, client *http.Client, method, url, token string, payload any) *http.Response {
 	t.Helper()
+	return requestWithContext(t, client, context.Background(), method, url, token, payload)
+}
+
+func requestWithContext(t *testing.T, client *http.Client, ctx context.Context, method, url, token string, payload any) *http.Response {
+	t.Helper()
 
 	var body bytes.Buffer
 	if payload != nil {
@@ -215,7 +308,7 @@ func mustRequest(t *testing.T, client *http.Client, method, url, token string, p
 		}
 	}
 
-	req, err := http.NewRequest(method, url, &body)
+	req, err := http.NewRequestWithContext(ctx, method, url, &body)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -231,6 +324,17 @@ func mustRequest(t *testing.T, client *http.Client, method, url, token string, p
 		t.Fatalf("%s %s: %v", method, url, err)
 	}
 	return resp
+}
+
+func containsCalendar(calendars []struct {
+	ID string `json:"id"`
+}, id string) bool {
+	for _, calendar := range calendars {
+		if calendar.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func decodeResponse(t *testing.T, resp *http.Response, target any) {
