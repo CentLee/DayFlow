@@ -39,6 +39,7 @@ struct MainTabView: View {
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
         }
+        .accessibilityIdentifier("authenticated.shell")
     }
 }
 
@@ -116,9 +117,11 @@ private struct LoginFormView: View {
                 .keyboardType(.emailAddress)
                 .autocorrectionDisabled()
                 .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("login.email")
 
             SecureField("비밀번호", text: $appStore.loginPassword)
                 .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("login.password")
 
             Button {
                 Task {
@@ -136,6 +139,7 @@ private struct LoginFormView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(appStore.isAuthenticating)
+            .accessibilityIdentifier("login.submit")
 
             Button("초대받은 계정이신가요? 가입으로 이동") {
                 appStore.showRegister()
@@ -273,6 +277,7 @@ struct BudgetBoardView: View {
                         FixedItemsSection(items: board.fixedItems)
                         VariableBucketsSection(buckets: board.variableBuckets)
                         BillingRemindersSection(reminders: board.billingReminders)
+                            .accessibilityIdentifier("budget.board.loaded")
                     } else if appStore.budgetStore.isLoading {
                         ProgressView("예산 보드를 불러오는 중입니다")
                             .frame(maxWidth: .infinity, alignment: .center)

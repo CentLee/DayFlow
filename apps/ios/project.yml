@@ -1,6 +1,6 @@
 name: DayFlow
 options:
-  minimumXcodeGenVersion: 2.38.0
+  minimumXcodeGenVersion: 2.45.3
 schemes:
   DayFlow:
     build:
@@ -9,6 +9,7 @@ schemes:
     test:
       targets:
         - DayFlowTests
+        - DayFlowUITests
 targets:
   DayFlow:
     type: application
@@ -20,16 +21,29 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kakaoent.dayflow
         SWIFT_VERSION: 6.0
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
-        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+      configs:
+        Debug:
+          INFOPLIST_FILE: DayFlow/Info-Debug.plist
+        Release:
+          INFOPLIST_FILE: DayFlow/Info-Release.plist
   DayFlowTests:
     type: bundle.unit-test
     supportedDestinations: [iOS, iOS Simulator]
     deploymentTarget: "17.5"
     sources:
       - DayFlowTests
+    dependencies:
+      - target: DayFlow
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: 6.0
+  DayFlowUITests:
+    type: bundle.ui-testing
+    supportedDestinations: [iOS, iOS Simulator]
+    deploymentTarget: "17.5"
+    sources:
+      - DayFlowUITests
     dependencies:
       - target: DayFlow
     settings:
