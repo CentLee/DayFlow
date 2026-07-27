@@ -33,11 +33,38 @@ struct AuthResponse: Codable {
     let token: String
 }
 
-struct MeResponse: Codable {
+struct MeResponse: Decodable {
     let user: SessionUser
     let ownedCalendars: [CalendarSummary]
     let sharedCalendars: [CalendarSummary]
     let currentBudgetMonthKey: String
+
+    init(
+        user: SessionUser,
+        ownedCalendars: [CalendarSummary],
+        sharedCalendars: [CalendarSummary],
+        currentBudgetMonthKey: String
+    ) {
+        self.user = user
+        self.ownedCalendars = ownedCalendars
+        self.sharedCalendars = sharedCalendars
+        self.currentBudgetMonthKey = currentBudgetMonthKey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case user
+        case personalCalendar
+        case sharedCalendars
+        case currentBudgetMonthKey
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        user = try container.decode(SessionUser.self, forKey: .user)
+        ownedCalendars = [try container.decode(CalendarSummary.self, forKey: .personalCalendar)]
+        sharedCalendars = try container.decode([CalendarSummary].self, forKey: .sharedCalendars)
+        currentBudgetMonthKey = try container.decode(String.self, forKey: .currentBudgetMonthKey)
+    }
 }
 
 struct APIErrorResponse: Codable {

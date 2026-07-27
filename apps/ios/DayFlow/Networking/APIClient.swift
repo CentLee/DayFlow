@@ -124,7 +124,7 @@ struct APIClient: APIClientProtocol, @unchecked Sendable {
         method: String,
         requiresAuthorization: Bool = false
     ) async throws -> Response {
-        try await send(path: path, method: method, body: Optional<Data>.none, requiresAuthorization: requiresAuthorization)
+        try await sendData(path: path, method: method, body: nil, requiresAuthorization: requiresAuthorization)
     }
 
     private func send<RequestBody: Encodable, Response: Decodable>(
@@ -134,10 +134,10 @@ struct APIClient: APIClientProtocol, @unchecked Sendable {
         requiresAuthorization: Bool = false
     ) async throws -> Response {
         let bodyData = try Self.makeEncoder().encode(body)
-        return try await send(path: path, method: method, body: bodyData, requiresAuthorization: requiresAuthorization)
+        return try await sendData(path: path, method: method, body: bodyData, requiresAuthorization: requiresAuthorization)
     }
 
-    private func send<Response: Decodable>(
+    private func sendData<Response: Decodable>(
         path: String,
         method: String,
         body: Data?,
