@@ -8,6 +8,10 @@ The Excel workbook is a read-only product-design reference for the monthly
 board interaction and KPI formulas. It is not an application input or delivery
 artifact for any issue in this queue.
 
+## Temporary Cutover Base
+
+The temporary branch `integration/private-two-person-cutover` is scoped to the CEN-34 through CEN-43 cutover. Delivery issues targeting it must declare `Integration Base: integration/private-two-person-cutover` in Linear; absent metadata continues to use `develop`, while any other or malformed value is rejected. CEN-42 is the full E2E gate on that branch. CEN-43 is the final review and cutover PR whose head is that integration branch and whose base is `develop`; it is deliberately not a `feature/tasks-*` delivery and must not be treated as task completion.
+
 ## Legacy CEN-24--CEN-27 Disposition
 
 | Legacy issue | Disposition | Replacement mapping |
@@ -22,6 +26,7 @@ artifact for any issue in this queue.
 ### CEN-34 — [Integration] Terra runner model policy
 
 - Primary Agent: `integration-agent`
+- Integration Base: `integration/private-two-person-cutover`
 - Inputs:
   - `docs/product-spec.md`
   - `docs/local-runner.md`
@@ -47,6 +52,7 @@ artifact for any issue in this queue.
 ### CEN-35 — [Backend] fixed two-person data topology
 
 - Primary Agent: `backend-agent`
+- Integration Base: `integration/private-two-person-cutover`
 - Inputs:
   - `docs/product-spec.md`
   - `docs/domain-model.md`
@@ -72,6 +78,7 @@ artifact for any issue in this queue.
 ### CEN-36 — [Integration] private Tailscale/iMac deployment
 
 - Primary Agent: `integration-agent`
+- Integration Base: `integration/private-two-person-cutover`
 - Inputs:
   - `docs/product-spec.md`
   - `docs/api-contract.md`
@@ -97,6 +104,7 @@ artifact for any issue in this queue.
 ### CEN-37 — [Backend] Google ID-token exchange and legacy auth retirement
 
 - Primary Agent: `backend-agent`
+- Integration Base: `integration/private-two-person-cutover`
 - Inputs:
   - `docs/api-contract.md`
   - `docs/domain-model.md`
@@ -119,6 +127,7 @@ artifact for any issue in this queue.
 ### CEN-38 — [Backend] fixed calendar and owner-budget boundary
 
 - Primary Agent: `backend-agent`
+- Integration Base: `integration/private-two-person-cutover`
 - Inputs:
   - `docs/domain-model.md`
   - `docs/api-contract.md`
@@ -141,6 +150,7 @@ artifact for any issue in this queue.
 ### CEN-39 — [Integration] offline contract
 
 - Primary Agent: `integration-agent`
+- Integration Base: `integration/private-two-person-cutover`
 - Inputs:
   - `docs/api-contract.md`
   - `docs/sync-model.md`
@@ -165,6 +175,7 @@ artifact for any issue in this queue.
 ### CEN-40 — [iOS] Google auth/bootstrap
 
 - Primary Agent: `ios-agent`
+- Integration Base: `integration/private-two-person-cutover`
 - Inputs:
   - `docs/ios-architecture.md`
   - `docs/api-contract.md`
@@ -188,6 +199,7 @@ artifact for any issue in this queue.
 ### CEN-41 — [iOS] offline cache/explicit transfer
 
 - Primary Agent: `ios-agent`
+- Integration Base: `integration/private-two-person-cutover`
 - Inputs:
   - `docs/ios-architecture.md`
   - `docs/sync-model.md`
@@ -211,6 +223,7 @@ artifact for any issue in this queue.
 ### CEN-42 — [Integration] private two-role system E2E
 
 - Primary Agent: `integration-agent`
+- Integration Base: `integration/private-two-person-cutover`
 - Inputs:
   - completed CEN-35 through CEN-41 work
   - `docs/product-spec.md`

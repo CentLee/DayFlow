@@ -374,7 +374,7 @@ dayflow_supervisor_dispatch() {
 }
 
 dayflow_supervisor_cleanup_completed() {
-  local state_file issue_key worktree status branch status_json rc=0 fetched=false
+  local state_file issue_key worktree status branch base_branch status_json rc=0 fetched_bases=' '
   for state_file in "$DAYFLOW_STATE_ROOT"/CEN-*.json; do
     [[ -f "$state_file" ]] || continue
     issue_key="$(basename "$state_file" .json)"
@@ -383,6 +383,12 @@ dayflow_supervisor_cleanup_completed() {
     [[ "$status" == "done" ]] || continue
     worktree="$(jq -r '.worktree // ""' "$state_file")"
     branch="$(jq -r '.branch // ""' "$state_file")"
+    base_branch="$(jq -r '.base_branch // "develop"' "$state_file")"
+    dayflow_allowed_base_branch "$base_branch" || {
+      dayflow_supervisor_error "$issue_key cleanup has an unsafe base branch"
+      rc=1
+      continue
+    }
     [[ -n "$worktree" && -e "$worktree/.git" ]] || continue
     [[ "$worktree" == "$DAYFLOW_WORKTREE_ROOT/$issue_key" && "$worktree" != "$ROOT_DIR" ]] || {
       dayflow_supervisor_error "$issue_key cleanup path is not the exact owned worktree"
@@ -390,11 +396,11 @@ dayflow_supervisor_cleanup_completed() {
       continue
     }
     status_json="$(dayflow_status_issue "$issue_key")" || { rc=1; continue; }
-    jq -e --arg branch "$branch" --arg done "$DAYFLOW_STATE_DONE_NAME" '
+    jq -e --arg branch "$branch" --arg base "$base_branch" --arg done "$DAYFLOW_STATE_DONE_NAME" '
       .linear_state == $done and .pull_request.state == "MERGED"
-      and .pull_request.baseRefName == "develop" and .pull_request.headRefName == $branch
+      and .pull_request.baseRefName == $base and .pull_request.headRefName == $branch
     ' >/dev/null <<<"$status_json" || {
-      dayflow_supervisor_error "$issue_key cleanup lacks merged develop PR and Linear Done proof"
+      dayflow_supervisor_error "$issue_key cleanup lacks merged base PR and Linear Done proof"
       rc=1
       continue
     }
@@ -403,9 +409,9 @@ dayflow_supervisor_cleanup_completed() {
       rc=1
       continue
     }
-    if [[ "$fetched" == "false" ]]; then
-      git -C "$ROOT_DIR" fetch --prune origin develop >/dev/null || return 1
-      fetched=true
+    if [[ "$fetched_bases" != *" ${base_branch} "* ]]; then
+      git -C "$ROOT_DIR" fetch --prune origin "$base_branch" >/dev/null || return 1
+      fetched_bases+="${base_branch} "
     fi
     git -C "$ROOT_DIR" worktree remove "$worktree" || { rc=1; continue; }
     dayflow_state_update "$issue_key" --arg at "$(dayflow_now_iso)" '.worktree_cleaned = true | .cleaned_at = $at'

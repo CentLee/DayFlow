@@ -282,6 +282,34 @@ run_merged_base_integrity_test() {
   rm -rf "$test_root"
 }
 
+run_temporary_integration_base_test() {
+  local test_root seed worktree state_file
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  git -C "$seed" branch integration/private-two-person-cutover develop
+  git -C "$seed" push origin integration/private-two-person-cutover >/dev/null
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  export DAYFLOW_ISSUE_FIXTURE_FILE="$SOURCE_ROOT/scripts/tests/fixtures/admissible-integration-base-issue.json"
+  export FAKE_GH_BASE_BRANCH=integration/private-two-person-cutover
+  export FAKE_CODEX_MODE=success FAKE_REVIEW_MODE=clean
+  export FAKE_CODEX_REVIEW_PROMPT_LOG="$test_root/review.prompt"
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
+  state_file="$DAYFLOW_STATE_ROOT/CEN-29.json"
+  worktree="$(jq -r '.worktree' "$state_file")"
+  assert_eq 'integration/private-two-person-cutover' "$(jq -r '.base_branch' "$state_file")" 'declared temporary base persists in local state'
+  assert_success 'worktree starts from declared temporary base' git -C "$worktree" merge-base --is-ancestor origin/integration/private-two-person-cutover HEAD
+  assert_file_contains "$FAKE_GH_LOG" -- '--base integration/private-two-person-cutover' 'delivery PR targets declared temporary base'
+  assert_file_contains "$FAKE_CODEX_REVIEW_PROMPT_LOG" 'origin/integration/private-two-person-cutover' 'review compares against declared temporary base'
+  : >"$FAKE_CURL_LOG"
+  export FAKE_GH_PR_STATE=MERGED
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" reconcile CEN-29 >/dev/null
+  assert_eq 'done' "$(jq -r '.status' "$state_file")" 'merged declared-base PR converges local lifecycle to Done'
+  assert_file_contains "$FAKE_CURL_LOG" 'state-done' 'merged declared-base PR converges Linear to Done'
+  assert_failure 'local reconciliation leaves completion delivery to hosted dedupe' rg -q 'discord.test/webhook' "$FAKE_CURL_LOG"
+  rm -rf "$test_root"
+}
+
 run_merged_reviewed_head_integrity_test() {
   local test_root seed state_file reviewed_head tmp_file
   test_root="$(mktemp -d)"
@@ -532,6 +560,8 @@ run_owned_recovery_gate_case() {
 
 if [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "locks" ]]; then
   run_webhook_retry_and_lock_test
+elif [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "temporary-base" ]]; then
+  run_temporary_integration_base_test
 elif [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "owned-recovery-gates" ]]; then
   run_owned_recovery_gate_case publication-retry preflight
   run_owned_recovery_gate_case publication-retry linear
@@ -562,6 +592,7 @@ else
   run_ci_timeout_test
   run_webhook_retry_and_lock_test
   run_merged_base_integrity_test
+  run_temporary_integration_base_test
   run_merged_reviewed_head_integrity_test
   run_merged_linear_done_rejection_test
   run_cross_issue_merge_ready_store_lock_test

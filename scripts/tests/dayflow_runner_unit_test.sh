@@ -43,12 +43,19 @@ assert_success 'primary prompt reserves Git publication for runner' grep -Fq 'Do
 assert_success 'primary prompt prohibits repository dumps' grep -Fq 'Never print or request a full repository tree' <<<"$primary_prompt"
 assert_success 'primary prompt contains narrow input reference' grep -Fq 'docs/automation-model.md' <<<"$primary_prompt"
 
-assert_eq 'gpt-5.6-sol high' "$(dayflow_model_for_agent integration-agent)" 'integration routing'
-assert_eq 'gpt-5.6-sol high' "$(dayflow_model_for_agent product-agent)" 'product routing'
-assert_eq 'gpt-5.6-sol high' "$(dayflow_model_for_agent review-agent)" 'review routing'
+assert_eq 'gpt-5.6-terra high' "$(dayflow_model_for_agent integration-agent)" 'integration routing'
+assert_eq 'gpt-5.6-terra high' "$(dayflow_model_for_agent product-agent)" 'product routing'
+assert_eq 'gpt-5.6-terra high' "$(dayflow_model_for_agent review-agent)" 'review routing'
 assert_eq 'gpt-5.6-terra medium' "$(dayflow_model_for_agent backend-agent)" 'backend routing'
 assert_eq 'gpt-5.6-terra medium' "$(dayflow_model_for_agent ios-agent)" 'ios routing'
 assert_failure 'unknown agent must fail closed' dayflow_model_for_agent unknown-agent
+assert_eq 'develop' "$(dayflow_integration_base_branch "$admissible")" 'missing Integration Base defaults to develop'
+integration_description="$(jq -r '.description' "$TEST_DIR/fixtures/admissible-integration-base-issue.json")"
+assert_eq 'integration/private-two-person-cutover' "$(dayflow_integration_base_branch "$integration_description")" 'exact Integration Base is accepted'
+malformed_description="$(jq -r '.description' "$TEST_DIR/fixtures/malformed-integration-base-issue.json")"
+assert_failure 'malformed Integration Base fails closed' dayflow_integration_base_branch "$malformed_description"
+assert_success 'declared Integration Base passes admission' dayflow_validate_admission "$(<"$TEST_DIR/fixtures/admissible-integration-base-issue.json")"
+assert_failure 'malformed Integration Base fails admission without fallback' dayflow_validate_admission "$(<"$TEST_DIR/fixtures/malformed-integration-base-issue.json")"
 assert_eq 'feature/tasks-29-replace-symphony-with-dayflow-local-runner' \
   "$(dayflow_branch_name CEN-29 '[Integration] Replace Symphony with DayFlow local runner')" 'branch naming'
 
@@ -203,12 +210,12 @@ printf '%s\n' clean >"$resume_repo/README.md"
 git -C "$resume_repo" add README.md
 git -C "$resume_repo" commit -m seed >/dev/null
 current_branch="$(git -C "$resume_repo" branch --show-current)"
-printf '%s\n' "{\"worktree\":\"$resume_repo\",\"session_id\":\"session\",\"primary_agent\":\"integration-agent\",\"model\":\"gpt-5.6-sol\",\"reasoning\":\"high\"}" \
+printf '%s\n' "{\"worktree\":\"$resume_repo\",\"session_id\":\"session\",\"primary_agent\":\"integration-agent\",\"model\":\"gpt-5.6-terra\",\"reasoning\":\"high\"}" \
   >"$DAYFLOW_STATE_ROOT/CEN-40.json"
-assert_success 'matching resume ownership' dayflow_validate_resume_state CEN-40 "$current_branch" integration-agent gpt-5.6-sol high
+assert_success 'matching resume ownership' dayflow_validate_resume_state CEN-40 "$current_branch" integration-agent gpt-5.6-terra high
 assert_failure 'resume ownership drift must fail' dayflow_validate_resume_state CEN-40 "$current_branch" backend-agent gpt-5.6-terra medium
 printf '%s\n' dirty >>"$resume_repo/README.md"
-assert_failure 'dirty resume worktree fails closed' dayflow_validate_resume_state CEN-40 "$current_branch" integration-agent gpt-5.6-sol high
+assert_failure 'dirty resume worktree fails closed' dayflow_validate_resume_state CEN-40 "$current_branch" integration-agent gpt-5.6-terra high
 mkdir "$DAYFLOW_STATE_ROOT/CEN-29.lock"
 printf '%s\n' '999999' >"$DAYFLOW_STATE_ROOT/CEN-29.lock/pid"
 assert_success 'stale lock recovery' dayflow_acquire_lock CEN-29

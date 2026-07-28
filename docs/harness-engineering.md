@@ -14,7 +14,7 @@ Each issue has one Primary Agent. Sequential integration or review handoff is al
 
 ### Models Follow Leverage
 
-Use `gpt-5.6-sol/high` for product, integration, and review decisions. Use `gpt-5.6-terra/medium` for bounded backend and iOS implementation. Deterministic Git, Linear, proof, and webhook operations use shell logic and no model tokens.
+Use `gpt-5.6-terra/high` for product, integration, and review decisions and `gpt-5.6-terra/medium` for bounded backend and iOS implementation. There is no alternate-model fallback. Deterministic Git, Linear, proof, and webhook operations use shell logic and no model tokens.
 
 ### Fail Closed and Preserve Work
 

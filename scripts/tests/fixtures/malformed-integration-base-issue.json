@@ -1,0 +1,7 @@
+{
+  "id": "issue-29",
+  "identifier": "CEN-29",
+  "title": "[Integration] Reject unsafe base",
+  "description": "Goal:\n- Reject unsafe metadata.\n\nPrimary Agent:\n- integration-agent\n\nIntegration Base: integration/private-two-person-cutover/extra\n\nInputs:\n- docs/automation-model.md\n\nDone When:\n- Admission fails.\n- No fallback occurs.\n\nOut of Scope:\n- Any deploy change.",
+  "state": {"id": "state-todo", "name": "Todo"}
+}

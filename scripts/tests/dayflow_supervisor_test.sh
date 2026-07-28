@@ -38,7 +38,7 @@ git -C "$resume_worktree" config user.email 'dayflow-tests@example.invalid'
 printf '%s\n' owned >"$resume_worktree/README.md"
 git -C "$resume_worktree" add README.md
 git -C "$resume_worktree" commit -m seed >/dev/null
-jq -n --arg worktree "$resume_worktree" '{issue:"CEN-50",status:"review-changes",worktree:$worktree,branch:"feature/tasks-50-remediation",session_id:"owned-session",primary_agent:"integration-agent",model:"gpt-5.6-sol",reasoning:"high"}' \
+jq -n --arg worktree "$resume_worktree" '{issue:"CEN-50",status:"review-changes",worktree:$worktree,branch:"feature/tasks-50-remediation",session_id:"owned-session",primary_agent:"integration-agent",model:"gpt-5.6-terra",reasoning:"high"}' \
   >"$DAYFLOW_STATE_ROOT/CEN-50.json"
 resume_snapshot="$(jq -c '
   .issues += [
@@ -59,7 +59,7 @@ assert_success 'owned review changes dispatch automatically' dayflow_supervisor_
 assert_file_contains "$resume_dispatch_log" '^run CEN-50$' 'owned remediation was dispatched before Todo'
 DAYFLOW_SUPERVISOR_RUNNER_BIN="$saved_supervisor_runner_bin"
 
-jq -n --arg worktree "$resume_worktree" '{issue:"CEN-50",status:"publication-retry",worktree:$worktree,branch:"feature/tasks-50-remediation",session_id:"owned-session",primary_agent:"integration-agent",model:"gpt-5.6-sol",reasoning:"high",publication:{phase:"committed",head_sha:"fixture-head"},test_evidence:{summary:"fixture",tests:[{name:"focused",status:"passed"}]}}' \
+jq -n --arg worktree "$resume_worktree" '{issue:"CEN-50",status:"publication-retry",worktree:$worktree,branch:"feature/tasks-50-remediation",session_id:"owned-session",primary_agent:"integration-agent",model:"gpt-5.6-terra",reasoning:"high",publication:{phase:"committed",head_sha:"fixture-head"},test_evidence:{summary:"fixture",tests:[{name:"focused",status:"passed"}]}}' \
   >"$DAYFLOW_STATE_ROOT/CEN-50.json"
 printf '%s\n' '{"identifier":"CEN-50","pid":999999,"process_start":"stale","parallel_safe":true,"write_scopes":["docs/remediation"]}' \
   >"$DAYFLOW_SUPERVISOR_CLAIM_ROOT/CEN-50.json"
@@ -223,26 +223,37 @@ DAYFLOW_WORKTREE_ROOT="$DAYFLOW_RUNTIME_DIR/worktrees"
 DAYFLOW_STATE_ROOT="$DAYFLOW_RUNTIME_DIR/state"
 DAYFLOW_LOG_ROOT="$DAYFLOW_RUNTIME_DIR/logs"
 mkdir -p "$DAYFLOW_WORKTREE_ROOT" "$DAYFLOW_STATE_ROOT" "$DAYFLOW_LOG_ROOT"
-for cleanup_issue in CEN-28 CEN-62 CEN-63; do
+git -C "$cleanup_seed" branch integration/private-two-person-cutover develop
+git -C "$cleanup_seed" push origin integration/private-two-person-cutover >/dev/null
+for cleanup_issue in CEN-28 CEN-62 CEN-63 CEN-64; do
   cleanup_branch="feature/tasks-${cleanup_issue#CEN-}-cleanup"
-  git -C "$cleanup_seed" worktree add -b "$cleanup_branch" "$DAYFLOW_WORKTREE_ROOT/$cleanup_issue" develop >/dev/null
-  jq -n --arg issue "$cleanup_issue" --arg branch "$cleanup_branch" --arg worktree "$DAYFLOW_WORKTREE_ROOT/$cleanup_issue" \
-    '{issue:$issue,status:"done",branch:$branch,worktree:$worktree}' >"$DAYFLOW_STATE_ROOT/$cleanup_issue.json"
+  cleanup_base=develop
+  [[ "$cleanup_issue" != CEN-64 ]] || cleanup_base=integration/private-two-person-cutover
+  git -C "$cleanup_seed" worktree add -b "$cleanup_branch" "$DAYFLOW_WORKTREE_ROOT/$cleanup_issue" "$cleanup_base" >/dev/null
+  jq -n --arg issue "$cleanup_issue" --arg branch "$cleanup_branch" --arg worktree "$DAYFLOW_WORKTREE_ROOT/$cleanup_issue" --arg base "$cleanup_base" \
+    '{issue:$issue,status:"done",branch:$branch,worktree:$worktree,base_branch:$base}' >"$DAYFLOW_STATE_ROOT/$cleanup_issue.json"
 done
 printf '%s\n' dirty >"$DAYFLOW_WORKTREE_ROOT/CEN-63/untracked.txt"
 dayflow_status_issue() {
   local issue_key="$1"
-  local state_file branch
+  local state_file branch base
   state_file="$DAYFLOW_STATE_ROOT/$issue_key.json"
   branch="$(jq -r '.branch' "$state_file")"
-  jq -n --arg issue "$issue_key" --arg branch "$branch" --arg done "$DAYFLOW_STATE_DONE_NAME" \
-    '{issue:$issue,linear_state:$done,local:{},pull_request:{state:"MERGED",baseRefName:"develop",headRefName:$branch}}'
+  base="$(jq -r '.base_branch' "$state_file")"
+  jq -n --arg issue "$issue_key" --arg branch "$branch" --arg base "$base" --arg done "$DAYFLOW_STATE_DONE_NAME" \
+    '{issue:$issue,linear_state:$done,local:{},pull_request:{state:"MERGED",baseRefName:$base,headRefName:$branch}}'
 }
+export GIT_TRACE="$TEST_TMP/cleanup-git-trace.log"
 assert_failure 'dirty completed worktree makes cleanup fail closed' dayflow_supervisor_cleanup_completed
+unset GIT_TRACE
 assert_failure 'clean completed worktree removed non-forced' test -e "$DAYFLOW_WORKTREE_ROOT/CEN-62"
+assert_failure 'integration-base completed worktree removed non-forced' test -e "$DAYFLOW_WORKTREE_ROOT/CEN-64"
 assert_success 'dirty completed worktree preserved' test -e "$DAYFLOW_WORKTREE_ROOT/CEN-63/.git"
 assert_success 'CEN-28 is always preserved' test -e "$DAYFLOW_WORKTREE_ROOT/CEN-28/.git"
 assert_eq 'true' "$(jq -r '.worktree_cleaned' "$DAYFLOW_STATE_ROOT/CEN-62.json")" 'cleanup state proof persisted'
+assert_eq 'true' "$(jq -r '.worktree_cleaned' "$DAYFLOW_STATE_ROOT/CEN-64.json")" 'integration-base cleanup state proof persisted'
+assert_file_contains "$TEST_TMP/cleanup-git-trace.log" 'fetch --prune origin develop' 'cleanup fetches the develop base'
+assert_file_contains "$TEST_TMP/cleanup-git-trace.log" 'fetch --prune origin integration/private-two-person-cutover' 'cleanup fetches each declared base'
 assert_failure 'cleanup sends no Discord delivery' rg -q 'discord' "$FAKE_CURL_LOG"
 
 finish_tests 'dayflow_supervisor_test'

@@ -22,7 +22,7 @@ Aggregate tokens exceed 120K, output makes no progress for five minutes, or an i
 
 ### F5. Delivery Failure
 
-The Primary Agent completes without valid passed-test evidence, the correct branch, commit, push, develop-targeted PR, or proof sections. Missing or malformed evidence blocks before publication. Recoverable commit/push/PR transport failures retain a deterministic publication phase for retry without another primary model call; branch, head, base, or proof mismatches block as integrity failures.
+The Primary Agent completes without valid passed-test evidence, the correct branch, commit, push, declared-base PR, or proof sections. Missing or malformed evidence blocks before publication. Recoverable commit/push/PR transport failures retain a deterministic publication phase for retry without another primary model call; branch, head, base, or proof mismatches block as integrity failures.
 
 ### F6. Review Failure
 
@@ -46,7 +46,7 @@ A live PID-backed claim consumes dispatch capacity. A dead claim is released onl
 
 ### F11. Cleanup Failure
 
-Cleanup requires exact worktree ownership, runner proof of Linear `Done` and a matching merged PR into `develop`, and an empty worktree. Any failed guard preserves the workspace. CEN-28 is unconditionally excluded.
+Cleanup requires exact worktree ownership, runner proof of Linear `Done` and a matching merged PR into the persisted declared base, and an empty worktree. Any failed guard preserves the workspace. CEN-28 is unconditionally excluded.
 
 ### F12. Launchd Environment Failure
 

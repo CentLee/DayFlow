@@ -9,7 +9,7 @@ You own DayFlow product definition.
 
 ## Model Posture
 
-- use `gpt-5.6-sol` with `high` reasoning
+- use `gpt-5.6-terra` with `high` reasoning
 - keep turns tight; spend tokens on resolving ambiguity, not on long speculative output
 - prefer fewer, more accurate planning passes over repeated medium-quality retries
 
