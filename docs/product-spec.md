@@ -26,7 +26,6 @@ The MVP is not a public service:
 - has one private personal calendar
 - is a member of the household shared calendar
 - is the only person with an expense book and monthly budget board
-- can import the Excel-derived budget model
 
 ### Partner
 
@@ -74,8 +73,10 @@ always means a DayFlow calendar unless explicitly stated otherwise.
 
 ## Owner-Only Monthly Budget Board
 
-The Excel workbook remains the source of truth for the budget interaction
-model:
+The Excel workbook is a read-only product-design reference. It informs the
+monthly-board interaction model and KPI formulas only; DayFlow never imports,
+uploads, parses, migrates, or stores the workbook or any other Excel file.
+The resulting budget experience has these constraints:
 
 - the monthly summary is the primary dashboard
 - fixed recurring costs are first-class objects
@@ -188,6 +189,6 @@ The removal must be staged safely:
 - a personal event is shared only by explicit copy or move
 - the partner cannot obtain owner budget data online, offline, or through
   calendar membership
-- the owner can use the Excel-derived monthly board with correct KPIs
+- the owner can use the monthly board with correct KPIs
 - both iPhones remain useful during iMac downtime and converge after reconnection
 - the deployed service has no public onboarding or public network path
