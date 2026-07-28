@@ -237,9 +237,6 @@ VALUES ($1, $2, $3, $4, $5, $6, $6)`,
 	if err = s.insertSession(ctx, tx, user.ID, sessionHash, now); err != nil {
 		return domain.User{}, "", err
 	}
-	if err = s.budget.EnsureUser(ctx, user); err != nil {
-		return domain.User{}, "", err
-	}
 	if err = tx.Commit(); err != nil {
 		return domain.User{}, "", fmt.Errorf("commit register: %w", err)
 	}
