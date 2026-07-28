@@ -1,159 +1,193 @@
 # DayFlow Product Spec
 
-## Summary
+## Product Baseline
 
-DayFlow combines a personal calendar, invite-based shared calendars, and a personal-first monthly budget board.
+DayFlow is a private, self-hosted productivity app for exactly two people: the
+owner and the owner's partner. It runs on two iPhones, while the owner's iMac
+hosts the API and PostgreSQL.
 
-The budget experience is modeled directly after the provided Excel workbook:
+The MVP is not a public service:
 
-- top-level monthly KPIs are always visible
-- fixed costs are edited in place
-- variable spending is handled as buckets rather than mandatory transaction rows
-- billing reminders are attached to budget items for quick planning
+- iOS is the only client platform.
+- Exactly two Google identities are allowlisted.
+- Google Sign-In proves identity only. DayFlow does not request Google Calendar
+  scopes, read or write Google Calendar data, or retain Google access tokens.
+- Tailscale is the only remote transport between either iPhone and the iMac;
+  clients use the iMac's MagicDNS name.
+- There is no purchased domain, public ingress, password registration,
+  email/SMS invitation, or arbitrary onboarding.
+- The household calendar is provisioned by the system rather than created or
+  joined by users.
 
-## Mandatory Input Insights
+## People and Data Boundaries
 
-### Harness Patterns Used
+### Owner
 
-The provided harness references influenced the repo and agent structure:
+- has one private personal calendar
+- is a member of the household shared calendar
+- is the only person with an expense book and monthly budget board
+- can import the Excel-derived budget model
 
-- pipeline for requirement to implementation flow
-- fan-out/fan-in for backend, iOS, and integration work
-- producer-reviewer for final validation by the review agent
+### Partner
 
-### Excel Insights
+- has one private personal calendar
+- is a member of the household shared calendar
+- has no budget tab, budget bootstrap metadata, budget API access, or local
+  budget cache
 
-Observed structure from the workbook:
-
-- monthly summary: current money, monthly budget, fixed costs, savings, remaining budget
-- fixed items: named recurring costs with on/off state and base value
-- variable buckets: lunch/weekend meals, flexible money
-- calendar-like reminders: settlement days attached to items
-
-These insights shape the MVP:
-
-- budget board is the main expense UI
-- single-month editing is optimized for speed
-- category and bucket editing matters more than detailed transaction history
-
-## Users
-
-- primary: you and a small number of invited collaborators, starting with a two-person household use case
-- client platform: iOS only
-- environment: self-hosted on a personal iMac server with a custom domain
+The two roles are deployment configuration, not user-manageable permissions.
+There is no third identity, guest, invitation, role-management, or team flow.
 
 ## Core Flows
 
-1. User signs in.
-2. App loads the user profile, calendars, and current month budget.
-3. User lands on a personal calendar tab and a shared calendar tab.
-4. User creates or edits events in the personal calendar.
-5. User creates a shared calendar and sends an invite link by email or SMS.
-6. Invited user opens the link, signs in or registers, and joins the shared calendar.
-7. User moves or copies a personal event into a shared calendar when it should become visible to both people.
-8. User edits monthly budget values in one screen and sees summary changes immediately.
+1. The person connects the iPhone to the private tailnet and opens DayFlow.
+2. The app uses Google Sign-In and sends the Google ID token to the iMac API.
+3. The API validates the token and its stable Google subject against the
+   two-entry allowlist, then provisions or resumes the matching DayFlow session.
+4. The app loads the person's private calendar and the one household calendar.
+5. The person creates private events in their personal calendar.
+6. A private event becomes visible to the other person only after an explicit
+   copy or move to the household calendar.
+7. The owner edits the monthly budget board; the partner never receives that
+   data.
+8. When the iMac is unavailable, the app uses its identity-partitioned local
+   cache, records supported edits, and synchronizes after private connectivity
+   returns.
 
-## MVP Features
+## Calendar Scope
 
-### Calendar
-
-- one default personal calendar per user
-- separate shared calendar list
-- personal and shared calendar tabs in the iOS app
+- exactly one private personal calendar per allowlisted person
+- exactly one pre-provisioned household shared calendar
 - month and week views
-- event CRUD
-- create a shared calendar
-- invite user to a specific shared calendar by email or SMS link
-- accept invite link into an existing or newly registered account
-- move or copy an event from personal calendar to shared calendar
-- simple member role model suitable for small household use
+- event create, read, update, and delete
+- both people may edit household events
+- no user-created calendars, membership management, invite links, or sharing
+  outside the household
+- personal calendars never accept members and never change kind
+- copy keeps the personal source and creates a household event
+- move creates the household event and removes the personal source only after
+  the server accepts the target write
+- event visibility follows its current calendar
 
-### Budget
+Google Calendar synchronization is outside MVP. "Calendar" in this document
+always means a DayFlow calendar unless explicitly stated otherwise.
 
-- one personal expense book per user
-- month board with KPI summary
-- fixed item template editing
-- variable buckets
-- savings target
-- billing reminder metadata
-- notes per item
+## Owner-Only Monthly Budget Board
 
-## Monthly Budget Board Rules
+The Excel workbook remains the source of truth for the budget interaction
+model:
 
-### Current MVP Board Scope
+- the monthly summary is the primary dashboard
+- fixed recurring costs are first-class objects
+- variable spending stays grouped into buckets
+- billing days are lightweight planning reminders
+- editing the board is faster and more important than transaction history
 
-- the month board is the main editing surface for one `YYYY-MM` snapshot
-- board edits are private to the owner and never inherit calendar sharing permissions
-- board edits update the visible KPI summary immediately
-- KPI cards are display-only derived views and never accept direct user overrides on the board
-- template management stays separate from month-board value editing
+Only the owner has one expense book. Calendar membership never grants budget
+access, and the partner does not receive empty or redacted budget objects.
 
-### Fixed Item Rules
+### Board Editing
 
-- fixed items appear on the board as month-scoped copies of the user template
-- the board supports fast edits to `enabled`, `amount`, and item notes for the current month
-- fixed-item names, default values, and ordering are managed in template editing, not inline on the month board
-- the board does not support inline add, delete, rename, or reorder actions for fixed items in MVP
-- editing a fixed item changes only the current month snapshot and does not rewrite other months or template defaults
+- one `YYYY-MM` snapshot is edited at a time
+- KPI cards update immediately but remain derived, display-only values
+- fixed items support current-month `enabled`, `amount`, and note edits
+- variable buckets support current-month planned and actual amount edits
+- reminder label, due-day label, and note are informational metadata
+- names, defaults, kinds, and ordering remain template-managed
+- month edits do not rewrite templates, prior months, or future months
+- reminders do not create calendar events or notifications
 
-### Variable Bucket Rules
+### KPI Truth
 
-- variable buckets stay bucket-based rather than becoming transaction rows
-- the board supports inline edits to planned and actual amounts for the current month
-- planned amounts affect remaining budget immediately
-- actual amounts affect free cash calculations immediately
-- bucket structure and defaults stay template-driven for MVP, rather than open-ended inline board customization
-- bucket names, ordering, and formula hints stay outside inline month-board editing
-
-### Billing Reminder Rules
-
-- reminders are planning metadata attached to budget items, not standalone schedule objects
-- the board supports editing reminder label, due-day label, and note text for the current month
-- reminders stay informational in MVP and do not create calendar events, notifications, or KPI changes
-- the board does not create, detach, or automate reminders beyond editing attached metadata for the current month
-- reminder edits are saved with the month board and remain private to the budget owner
-
-### Current KPI Truth
-
-- `current money` maps to `current_cash_amount` and is a manual month value
-- `monthly budget` maps to `base_budget_amount`
-- `carry over` maps to `carry_over_amount` and is a manual month value
+- `current money` maps to manual `current_cash_amount`
+- `monthly budget` maps to manual `base_budget_amount`
+- `carry over` maps to manual `carry_over_amount`
 - `fixed costs` is the sum of enabled fixed-item amounts
 - `savings` maps to `saving_amount`
-- `variable bucket total` is the sum of bucket `planned_amount` values
-- `remaining budget` is `base_budget_amount - fixed_cost_total - saving_amount - variable_bucket_total + carry_over_amount`
-- `free cash` remains a supporting derived value: `current_cash_amount - enabled fixed item amounts - variable bucket actual amounts`
-- bucket `actual_amount` values affect `free cash` but do not change `remaining budget`
-- `billing_reminders` and bucket `formula_hint` text are informational and do not affect KPI calculations
+- `variable bucket total` is the sum of planned bucket amounts
+- `remaining budget` is `base_budget_amount - fixed_cost_total -
+  saving_amount - variable_bucket_total + carry_over_amount`
+- `free cash` is `current_cash_amount - fixed_cost_total - variable bucket
+  actual amounts`
+- actual bucket amounts affect `free cash`, not `remaining budget`
+- reminders and formula hints do not affect KPI calculations
 
-### Follow-up Notes
+## Connectivity and Availability
 
-- future work may allow richer inline structure edits such as add, delete, rename, and reorder directly on the board
-- future work may separate reminder automation from reminder metadata, including calendar or notification hooks
-- future work may add transaction drill-down or formula-driven bucket behavior, but that is not part of the MVP board contract
+- The API and PostgreSQL run on the owner's iMac.
+- The API is reachable only at the iMac's Tailscale MagicDNS name; LAN or
+  loopback access used for owner-operated diagnostics does not create another
+  remote transport.
+- No public DNS, reverse proxy, tunnel, or internet-facing port is required.
+- The iMac is the synchronization authority and may be asleep, offline, or
+  otherwise unreachable.
+- Each iPhone retains the last confirmed data for its signed-in identity.
+- Supported offline event and owner-budget edits remain visibly pending until
+  acknowledged by the server.
+- Signing out or changing identities removes that identity's decrypted local
+  cache and pending writes from the device.
+- Offline operation never broadens authorization: the partner device cannot
+  cache or enqueue budget data.
 
-### Authentication
+## Target Authentication and Provisioning
 
-- invited account registration
-- password hash authentication
-- session token auth for iOS client
+- Deployment configuration contains exactly two entries: household role,
+  stable Google `sub`, and expected normalized email.
+- The stable subject is the authorization key. Email is verified and checked as
+  a deployment guard, but email alone never grants access.
+- The server validates Google issuer, audience, signature, expiry, and
+  `email_verified` before checking the allowlist.
+- An accepted exchange creates or reuses the DayFlow user, personal calendar,
+  household membership, and opaque revocable session.
+- The household calendar is created once by deployment migration and both
+  allowlisted users are attached automatically.
+- Only the owner receives an expense book and budget routing metadata.
+- A non-allowlisted or mismatched identity is denied without provisioning data.
+
+## Legacy-to-Target Migration
+
+Password login, registration, invites, arbitrary shared-calendar creation, and
+public/custom-domain ingress describe legacy implementation only. They are not
+fallback MVP flows.
+
+The removal must be staged safely:
+
+1. Back up PostgreSQL and validate the two configured Google subjects before
+   changing authentication.
+2. Map the existing owner and partner rows to those subjects without changing
+   their user IDs or personal-calendar ownership.
+3. Select or create the single household calendar, attach both users, and
+   explicitly archive any extra shared calendars after their events are
+   accounted for.
+4. Preserve the owner's expense book. Any legacy partner budget is exported or
+   quarantined for operator review and is never reassigned or exposed.
+5. Ship Google exchange and the new iOS client, then disable registration,
+   password login, invite, membership-management, and shared-calendar-creation
+   routes.
+6. Remove password hashes, invite secrets, obsolete delivery fields, and public
+   ingress configuration only after the cutover is verified and rollback data
+   is retained for the operator-defined window.
 
 ## Out of Scope
 
-- bank sync
-- full accounting ledger
-- event comments
-- push notifications
-- web frontend
-- real-time collaborative editing
-- converting a personal calendar into a shared calendar
-- general-purpose multi-tenant team calendar administration
+- Google Calendar synchronization
+- Android, web, macOS, or public SaaS clients
+- purchased domains or public ingress
+- password recovery or password registration
+- email/SMS delivery and invite acceptance
+- arbitrary users, teams, roles, calendars, or household administration
+- bank sync, transaction ledger, or shared budgeting
+- push notifications, event comments, and real-time co-editing
+- hosted-only infrastructure or Kubernetes
 
 ## Success Criteria
 
-- a user can manage a monthly budget without leaving the month board
-- fixed-cost toggles and amount edits update KPI totals correctly
-- every user always keeps a private personal calendar
-- invited users can access only the shared calendars they joined
-- a personal event can be intentionally copied or moved into a shared calendar
-- budget data remains private per user
+- only the two configured Google subjects can establish sessions
+- each person can see only their own personal calendar plus the household
+  calendar
+- a personal event is shared only by explicit copy or move
+- the partner cannot obtain owner budget data online, offline, or through
+  calendar membership
+- the owner can use the Excel-derived monthly board with correct KPIs
+- both iPhones remain useful during iMac downtime and converge after reconnection
+- the deployed service has no public onboarding or public network path
