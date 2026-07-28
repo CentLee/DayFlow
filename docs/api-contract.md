@@ -1,23 +1,37 @@
-# DayFlow API Contract Draft
+# DayFlow API Contract
 
 Base path: `/v1`
 
-Authentication: bearer token
+Authentication: opaque DayFlow bearer session established from a Google ID
+token. Google Sign-In is identity-only; the server does not request Google
+Calendar scopes or retain Google tokens.
+
+## Service Boundary
+
+- The API and PostgreSQL run on the owner's iMac.
+- Both iPhones reach the API only through the iMac's private Tailscale
+  MagicDNS name.
+- The API must not advertise or depend on a public URL, purchased domain, public
+  reverse proxy, or internet-facing listener.
+- PostgreSQL is not exposed to either phone; only the API accesses it.
+- The iMac is authoritative but not assumed continuously available. Clients may
+  read confirmed local cache data and enqueue supported mutations while it is
+  unreachable.
 
 ## Auth
 
-### `POST /auth/register`
+### `POST /auth/google/exchange`
 
-Creates an invited account and returns the session token.
+Validates a Google ID token, checks its stable subject against the deployment's
+exact two-entry allowlist, provisions deployment-owned resources if needed, and
+returns a DayFlow session.
 
 Request:
 
 ```json
 {
-  "email": "user@example.com",
-  "display_name": "Kakao",
-  "password": "secret1234",
-  "invite_code": "invite_abc"
+  "id_token": "google-id-token",
+  "device_id": "ios-installation-uuid"
 }
 ```
 
@@ -27,51 +41,62 @@ Response:
 {
   "user": {
     "id": "usr_123",
-    "email": "user@example.com",
-    "display_name": "Kakao"
+    "email": "owner@example.com",
+    "display_name": "DayFlow Owner",
+    "household_role": "owner"
   },
-  "token": "jwt-or-session-token"
+  "token": "opaque-dayflow-session-token",
+  "expires_at": "2026-08-27T00:00:00Z"
 }
 ```
 
-### `POST /auth/login`
+Validation requirements:
 
-Returns the session token for an existing account.
+- verify Google signature, issuer, configured iOS audience, expiry, and
+  `email_verified`
+- resolve authorization by the stable `sub`
+- require the normalized email to match the configured guard for that subject
+- accept only the enabled `owner` or `partner` entry
+- create no application data for rejected or mismatched identities
+- discard the Google ID token after validation and never persist Google access
+  or refresh tokens
+- issue an opaque, revocable DayFlow session scoped to the matched user
 
-Request:
+Status codes:
 
-```json
-{
-  "email": "user@example.com",
-  "password": "secret1234"
-}
-```
+- `200`: accepted and session established
+- `401 google_token_invalid`: token validation failed
+- `403 identity_not_allowlisted`: subject or email guard did not match
+- `503 deployment_not_ready`: the allowlist does not contain exactly one owner
+  and one partner
+
+### `POST /auth/logout`
+
+Revokes the current DayFlow bearer session. It has no effect on the person's
+Google account.
 
 Response:
 
 ```json
 {
-  "user": {
-    "id": "usr_123",
-    "email": "user@example.com",
-    "display_name": "Kakao"
-  },
-  "token": "jwt-or-session-token"
+  "revoked": true
 }
 ```
 
 ### `GET /me`
 
-Returns current user, the default personal calendar, joined shared calendars, and current budget month key.
+Returns the authenticated user, that user's personal calendar, the
+pre-provisioned household calendar, and role-gated routing metadata.
 
-Response:
+Owner response:
 
 ```json
 {
   "user": {
     "id": "usr_001",
-    "email": "owner@dayflow.local",
-    "display_name": "DayFlow Owner"
+    "email": "owner@example.com",
+    "display_name": "DayFlow Owner",
+    "household_role": "owner"
   },
   "personal_calendar": {
     "id": "cal_001",
@@ -80,57 +105,61 @@ Response:
     "color": "#1F6B5C",
     "updated_at": "2026-03-17T00:00:00Z"
   },
-  "shared_calendars": [],
-  "current_budget_month_key": "2026-03"
+  "household_calendar": {
+    "id": "cal_household",
+    "kind": "household",
+    "name": "Household",
+    "color": "#D8A21D",
+    "updated_at": "2026-03-17T00:00:00Z"
+  },
+  "budget_access": "owner",
+  "current_budget_month_key": "2026-03",
+  "sync_cursor": "cursor_123"
 }
 ```
 
-Notes:
-
-- auth responses stay minimal for MVP and do not inline calendar or budget payloads
-- `/me` is the bootstrap source for session user data and current month routing
-- `personal_calendar` is always singular in MVP and is automatically provisioned for each account
-- current memory mocks return the owner view above for the seeded owner account
-
-Invited collaborator example:
+Partner response:
 
 ```json
 {
   "user": {
-    "id": "usr_005",
-    "email": "user@example.com",
-    "display_name": "Kakao"
+    "id": "usr_002",
+    "email": "partner@example.com",
+    "display_name": "DayFlow Partner",
+    "household_role": "partner"
   },
   "personal_calendar": {
-    "id": "cal_101",
+    "id": "cal_002",
     "kind": "personal",
     "name": "Personal",
     "color": "#5B7FFF",
     "updated_at": "2026-03-17T00:00:00Z"
   },
-  "shared_calendars": [
-    {
-      "id": "cal_002",
-      "kind": "shared",
-      "name": "Shared Home",
-      "color": "#D8A21D",
-      "updated_at": "2026-03-17T00:00:00Z"
-    }
-  ],
-  "current_budget_month_key": "2026-03"
+  "household_calendar": {
+    "id": "cal_household",
+    "kind": "household",
+    "name": "Household",
+    "color": "#D8A21D",
+    "updated_at": "2026-03-17T00:00:00Z"
+  },
+  "budget_access": "none",
+  "sync_cursor": "cursor_456"
 }
 ```
 
 Notes:
 
-- invited collaborators always keep their own personal calendar and do not receive budget data from anyone else
-- the collaborator example is the intended grouped shape for session bootstrap after invite registration/login
+- `/me` is the bootstrap source for identity, calendar routing, and cache scope
+- `personal_calendar` is singular and always belongs to the session user
+- `household_calendar` is singular and provisioned by deployment
+- the partner payload omits `current_budget_month_key` and all budget data
+- auth responses do not inline calendar events or budget-month payloads
 
 ## Calendars
 
 ### `GET /calendars`
 
-Returns the current flat calendar list used for the shared calendar tab and calendar pickers.
+Returns exactly the caller's personal calendar and the household calendar.
 
 Response:
 
@@ -139,11 +168,17 @@ Response:
   "items": [
     {
       "id": "cal_001",
-      "kind": "shared",
-      "name": "Shared Home",
+      "kind": "personal",
+      "name": "Personal",
+      "color": "#1F6B5C",
+      "updated_at": "2026-03-17T00:00:00Z"
+    },
+    {
+      "id": "cal_household",
+      "kind": "household",
+      "name": "Household",
       "color": "#D8A21D",
-      "updated_at": "2026-03-17T00:00:00Z",
-      "membership_role": "owner"
+      "updated_at": "2026-03-17T00:00:00Z"
     }
   ]
 }
@@ -151,102 +186,25 @@ Response:
 
 Notes:
 
-- personal calendar bootstrap stays in `/me` and does not need to be duplicated in the shared calendar tab payload
-- the list stays budget-free even when a calendar is shared
+- the other person's personal calendar is never returned
+- this endpoint is canonical for calendar refresh; `/me` may seed the same two
+  summaries during bootstrap
+- calendar payloads never include budget fields
 
-### `POST /calendars`
+There is no calendar create, invite, invite-acceptance, membership, or
+role-management endpoint in the target contract.
 
-Creates a shared calendar.
+### Offline Mutation Rules
 
-Request:
+Event writes include a client-generated `client_mutation_id`. Updates and
+deletes also include the last confirmed `base_updated_at`. The server:
 
-```json
-{
-  "name": "Shared Home",
-  "color": "#5B7FFF"
-}
-```
-
-Response:
-
-```json
-{
-  "id": "cal_003",
-  "kind": "shared",
-  "name": "Shared Home",
-  "color": "#5B7FFF",
-  "updated_at": "2026-03-17T00:00:00Z"
-}
-```
-
-### `POST /calendars/{id}/invites`
-
-Creates or reuses an invite for a target email.
-
-Request:
-
-```json
-{
-  "email": "friend@example.com",
-  "delivery_channel": "sms",
-  "role": "editor"
-}
-```
-
-Response:
-
-```json
-{
-  "id": "cinv_123",
-  "calendar_id": "cal_002",
-  "email": "friend@example.com",
-  "delivery_channel": "sms",
-  "role": "editor",
-  "invite_code": "invite_abc",
-  "invite_url": "https://dayflow.local/invites/invite_abc",
-  "updated_at": "2026-03-17T00:00:00Z"
-}
-```
-
-### `GET /invites/{invite_code}`
-
-Returns invite preview data for an emailed or texted link before acceptance.
-
-Response:
-
-```json
-{
-  "invite": {
-    "id": "cinv_123",
-    "calendar_id": "cal_002",
-    "calendar_name": "Shared Home",
-    "email": "friend@example.com",
-    "delivery_channel": "sms",
-    "role": "editor",
-    "invited_by_display_name": "DayFlow Owner",
-    "expires_at": "2026-03-24T00:00:00Z"
-  }
-}
-```
-
-### `POST /invites/{invite_code}/accept`
-
-Accepts an invite link for the authenticated user and adds membership to the shared calendar.
-
-Response:
-
-```json
-{
-  "calendar": {
-    "id": "cal_002",
-    "kind": "shared",
-    "name": "Shared Home",
-    "color": "#D8A21D",
-    "membership_role": "editor",
-    "updated_at": "2026-03-17T00:00:00Z"
-  }
-}
-```
+- authorizes every replay against the current session
+- returns the already-applied result for a repeated mutation ID
+- returns `409 conflict` plus the current server resource when
+  `base_updated_at` is stale
+- retains deletion tombstones in the change feed long enough for both phones to
+  observe them
 
 ### `GET /calendars/{id}/events`
 
@@ -262,7 +220,7 @@ Response:
   "items": [
     {
       "id": "evt_001",
-      "calendar_id": "cal_002",
+      "calendar_id": "cal_household",
       "title": "보험비 정산",
       "notes": "25일 기준 확인",
       "starts_at": "2026-03-25T09:00:00Z",
@@ -284,20 +242,24 @@ Request:
   "notes": "25일 기준 확인",
   "starts_at": "2026-03-25T09:00:00Z",
   "ends_at": "2026-03-25T09:30:00Z",
-  "all_day": false
+  "all_day": false,
+  "client_mutation_id": "mut_device_a_001"
 }
 ```
 
 ### `POST /events/{id}/transfer`
 
-Copies or moves an event into a shared calendar without converting the personal calendar itself.
+Copies or moves the caller's personal event into the household calendar without
+changing the personal calendar itself.
 
 Request:
 
 ```json
 {
-  "target_calendar_id": "cal_002",
-  "mode": "copy"
+  "target_calendar_id": "cal_household",
+  "mode": "copy",
+  "base_updated_at": "2026-03-17T00:00:00Z",
+  "client_mutation_id": "mut_device_a_002"
 }
 ```
 
@@ -308,7 +270,7 @@ Response:
   "source_event_id": "evt_001",
   "target_event": {
     "id": "evt_101",
-    "calendar_id": "cal_002",
+    "calendar_id": "cal_household",
     "title": "보험비 정산",
     "notes": "25일 기준 확인",
     "starts_at": "2026-03-25T09:00:00Z",
@@ -329,13 +291,56 @@ Request:
   "notes": "입금 후 확인",
   "starts_at": "2026-03-25T09:00:00Z",
   "ends_at": "2026-03-25T09:30:00Z",
-  "all_day": false
+  "all_day": false,
+  "base_updated_at": "2026-03-17T00:00:00Z",
+  "client_mutation_id": "mut_device_a_003"
 }
 ```
 
 ### `DELETE /events/{id}`
 
+Request body:
+
+```json
+{
+  "base_updated_at": "2026-03-17T00:00:00Z",
+  "client_mutation_id": "mut_device_a_004"
+}
+```
+
+### `GET /sync/changes`
+
+Query params:
+
+- `cursor` (omit for the first identity bootstrap)
+
+Returns authorized calendar changes and, for the owner only, owner-budget
+changes after the cursor. The partner feed contains no budget scope, identifiers,
+or placeholders.
+
+```json
+{
+  "changes": [
+    {
+      "resource_type": "event",
+      "operation": "upsert",
+      "resource": {
+        "id": "evt_101",
+        "calendar_id": "cal_household",
+        "updated_at": "2026-03-17T00:00:00Z"
+      }
+    }
+  ],
+  "next_cursor": "cursor_789",
+  "has_more": false
+}
+```
+
 ## Budget
+
+Every budget endpoint requires `household_role = owner`. The partner receives
+`403 budget_owner_only`; the server does not resolve or serialize an expense
+book before that role check.
 
 ### `GET /budget/months/{yyyy-mm}`
 
@@ -456,11 +461,21 @@ Response shape:
 
 ### `PUT /budget/months/{yyyy-mm}`
 
-Upserts the month board. The client sends the full edited shape for simplicity.
+Upserts the owner's month board. The client sends the full edited shape plus:
+
+```json
+{
+  "base_updated_at": "2026-03-17T00:00:00Z",
+  "client_mutation_id": "mut_owner_phone_005"
+}
+```
 
 Current MVP contract rules:
 
 - the request is a current-month snapshot write, not a template update
+- retrying the same `client_mutation_id` returns the prior applied result
+- a stale `base_updated_at` returns `409 conflict` with the current server board;
+  the server does not silently merge month snapshots
 - clients should treat KPI summary values as derived from the submitted month data rather than as authoritative write inputs
 - the server recalculates `fixed_cost_total`, `variable_bucket_total`, `free_cash_amount`, and `remaining_budget_amount` on every save and ignores conflicting submitted summary values
 - `fixed_items` are month-entry values; clients may edit fields such as `enabled`, `amount`, and notes while preserving template-owned structure fields
@@ -493,7 +508,8 @@ Response shape:
 
 ### `PUT /budget/templates`
 
-Replaces the owner-scoped fixed-item template list for MVP.
+Replaces the owner-scoped fixed-item template list for MVP. Writes use the same
+`base_updated_at` and `client_mutation_id` concurrency rules as month writes.
 
 Current MVP contract rules:
 
@@ -517,8 +533,26 @@ Current MVP contract rules:
 
 - Every mutable resource returns `updated_at`
 - Calendar responses exclude private budget fields
-- Budget responses are single-user scoped
+- Budget responses and sync changes are owner-only
 - The iOS client should be able to render the budget screen from one budget-month response
 - Auth and calendar payloads use snake_case JSON keys over the wire
-- `/me` returns grouped calendar bootstrap data, while `/calendars` returns the shared-calendar list payload
-- personal calendars are never shared directly; only shared calendars accept members
+- `/me` returns role-gated bootstrap data, while `/calendars` returns exactly the
+  caller's personal calendar and the household calendar
+- personal calendars are never shared; the deployment-provisioned household
+  calendar is the only calendar with members
+- no endpoint supports registration, password login, invitations, arbitrary
+  calendar creation, membership changes, or role changes
+- all remote requests arrive through the iMac's Tailscale MagicDNS base URL;
+  no public base URL is part of this contract
+
+## Legacy Migration Targets
+
+`POST /auth/register`, `POST /auth/login`, password credentials and recovery,
+calendar creation, invite creation and acceptance, membership or role changes,
+and every public/custom-domain ingress path are legacy migration targets. They
+are not target endpoints and must not be retained as compatibility behavior.
+
+Migration removes or disables those paths only after the two Google subjects,
+fixed calendar topology, iOS client cutover, and a restorable database backup
+have been verified. Google Calendar synchronization is neither a migration
+path nor a target capability.

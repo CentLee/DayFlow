@@ -1,63 +1,113 @@
 # DayFlow Sync Model
 
-## Goals
+## Scope and Authority
 
-- keep the MVP simple
-- support quick budget edits
-- avoid cross-user data leakage
+- PostgreSQL on the owner's iMac is authoritative.
+- Both iPhones contact the API only at the iMac's Tailscale MagicDNS name.
+- The iMac can be unavailable; the client may render last-confirmed data and
+  queue supported writes for later reconciliation.
+- Google Sign-In is used only to establish DayFlow identity. No Google Calendar
+  data, scope, token, or Google sync participates in this model.
+- Cache, session, cursor, and mutation records are partitioned by the
+  authenticated Google subject/DayFlow user. Signing out or changing identity
+  removes that identity's local cache and pending mutations.
 
-## Session Bootstrap
+## Bootstrap and Reconciliation
 
-1. login or register and persist the bearer token
-2. fetch `/v1/me` for session user, grouped calendar bootstrap data, and `current_budget_month_key`
-3. fetch `/v1/calendars` for the canonical flat calendar list
-4. fetch `/v1/budget/months/{current_budget_month_key}` from step 2
+When online, the iOS client:
 
-Notes:
+1. exchanges a Google ID token at `POST /v1/auth/google/exchange` and stores
+   only the returned revocable DayFlow session;
+2. fetches `GET /v1/me` to establish the identity, two allowed calendar
+   summaries, role-gated cache scope, and cursor;
+3. fetches `GET /v1/calendars` and the visible event ranges, replacing stale
+   cache entries with authorized server records;
+4. only when `/me` declares `budget_access: "owner"`, fetches the current
+   `GET /v1/budget/months/{yyyy-mm}` board; and
+5. records the returned cursor, then consumes `GET /v1/sync/changes` until
+   `has_more` is false.
 
-- auth stays minimal for MVP and does not inline calendars or budget data
-- after `/v1/me`, the client may request `/v1/calendars` and `/v1/budget/months/{current_budget_month_key}` in parallel
-- if `/v1/calendars` is still loading, the client may temporarily seed the list from `/v1/me`
+On reconnect, the client first validates its DayFlow session, pulls changes
+from its last confirmed cursor, replays its outbox in creation order, resolves
+any conflict, and pulls changes again. A rejected identity or expired session
+does not replay anything.
 
-## Budget Sync
+The partner never calls budget endpoints, never creates an owner-budget cache
+or outbox, and never receives budget changes, identifiers, or placeholders in
+`/sync/changes`.
 
-- local edits immediately update visible KPIs
-- client stores the last server snapshot
-- client sends a full month payload on save
-- server returns authoritative recalculated values
-- if request fails, client restores the last confirmed snapshot and surfaces retry state
+## Local State and Outbox
 
-Current KPI sync assumptions:
+- The cache contains only the caller's personal calendar and the household
+  calendar; it never stores the other person's personal calendar.
+- Cached data is last-confirmed server data plus visibly marked pending local
+  overlays.
+- Each queued mutation has a stable `client_mutation_id`, resource type,
+  payload, last confirmed `base_updated_at` where required, and retry state.
+- Retrying the same mutation ID is safe: the server returns the already-applied
+  result rather than applying it twice.
+- Pending work is retained across temporary offline periods, but is removed on
+  successful acknowledgement, explicit discard, sign-out, or identity change.
+- The client must not synthesize a successful server timestamp or cursor for a
+  pending overlay.
 
-- optimistic client calculations should mirror the server formulas in `docs/api-contract.md`
-- `fixed_cost_total` uses only enabled fixed items
-- `variable_bucket_total` uses planned bucket amounts
-- `free_cash_amount` uses actual bucket amounts
-- `billing_reminders` and `formula_hint` do not affect KPI math
+Supported offline mutations are event create, update, delete, explicit
+personal-to-household copy/move, and owner budget-month/template writes.
+Authentication, calendar provisioning, membership, role, invite, and public
+ingress changes are never client-side offline actions.
 
-## Calendar Sync
+## Calendar Reconciliation
 
-- server is source of truth
-- client caches the flat calendar list and date-range event payloads
-- `/v1/me` is a bootstrap seed, not a replacement for `/v1/calendars`
-- last-write-wins by `updated_at` for MVP
+- `GET /calendars` returns exactly the caller's personal calendar and the
+  pre-provisioned household calendar.
+- Event creates are idempotent by `client_mutation_id`.
+- Event updates, deletes, copies, and moves carry `base_updated_at` from the
+  last confirmed event version.
+- If `base_updated_at` is current, the server applies the mutation and returns
+  the authoritative resource. If stale, it returns `409 conflict` with the
+  current resource or tombstone; the client keeps the local draft visibly
+  pending for explicit retry, discard, or user re-edit.
+- There is no silent last-write-wins overwrite for stale event edits.
+- A copy leaves the personal source unchanged and creates a household event.
+  A move creates the household event first and deletes the personal source only
+  after that target write is accepted atomically by the server.
+- Deletions appear as tombstones in `/sync/changes` until both device cursors
+  can reasonably observe them; a tombstone removes cached data and cannot be
+  resurrected by an older queued mutation.
 
-## Conflict Rules
+## Budget Reconciliation
 
-- budget: last confirmed server write wins
-- calendar: latest update timestamp wins
-- no merge UI in MVP
+- Only the owner has a budget board, cache, mutations, and budget change-feed
+  scope.
+- The client calculates KPI previews locally using the contract formulas, but
+  the server recalculates all derived values and is final.
+- A month or template write carries `base_updated_at` and
+  `client_mutation_id`; retrying it is idempotent.
+- If the board version is stale, the server returns `409 conflict` with the
+  current full board. The client does not merge snapshots or derived KPI fields
+  automatically; it preserves the pending edits for an explicit rebase, retry,
+  or discard.
+- A confirmed response replaces the local board and clears the acknowledged
+  pending overlay.
 
-## Mock Data Requirements
+## Failure and Privacy Rules
 
-- a current month budget mirroring the Excel categories
-- one shared calendar and one personal calendar
-- one invited collaborator account
-- auth mocks use the same `user` and `token` response shape for login and register
-- calendar mocks reuse the same minimal calendar summary shape in `/v1/me` and `/v1/calendars`
-- event mocks include one shared-calendar event with `notes`, `starts_at`, `ends_at`, and `updated_at`
+- Network, sleep, or Tailscale reachability failure leaves confirmed cache
+  readable and marks affected writes pending; it does not log the person out.
+- `401` clears the DayFlow session and stops replay. `403` removes inaccessible
+  pending data and does not reveal whether another user's resource exists.
+- A budget `403 budget_owner_only` is a privacy boundary, not an empty-board
+  response.
+- The API reauthorizes every replay against the current session and current
+  fixed calendar topology.
+- No local state or reconciliation path can create a third user, a new calendar,
+  a calendar membership, a Google Calendar connection, or public ingress.
 
-## Current Contract Gaps
+## Legacy Migration Targets
 
-- none for the current budget KPI formulas or budget-month payload shape; the served backend response, sync rules, and API examples now match
-- follow-up work remains in `[iOS] connect budget board to live API`, but that is a wiring task rather than a current payload mismatch
+Password/register/login sessions, invite acceptance, arbitrary membership and
+shared-calendar sync, and public/custom-domain transport are legacy migration
+inputs only. They are not fallback bootstrap or reconciliation behavior. The
+cutover starts from the fixed two-identity Google exchange and Tailscale
+MagicDNS path; legacy records are retired only after backup and data-mapping
+verification.
