@@ -96,7 +96,7 @@ dayflow_branch_name() {
 dayflow_model_for_agent() {
   case "$1" in
     product-agent|integration-agent|review-agent)
-      printf 'gpt-5.6-sol high\n'
+      printf 'gpt-5.6-terra high\n'
       ;;
     backend-agent|ios-agent)
       printf 'gpt-5.6-terra medium\n'
@@ -557,6 +557,31 @@ dayflow_primary_agent() {
     sed -E 's/^[[:space:]-]+//; s/[`*]//g; s/[[:space:]]+$//'
 }
 
+dayflow_allowed_base_branch() {
+  [[ "$1" == "develop" || "$1" == "integration/private-two-person-cutover" ]]
+}
+
+dayflow_integration_base_branch() {
+  local description="$1"
+  local values count value
+  values="$(printf '%s\n' "$description" | sed -nE 's/^[[:space:]]*[-*]?[[:space:]]*Integration Base:[[:space:]]*(.*[^[:space:]])[[:space:]]*$/\1/p')"
+  count="$(printf '%s\n' "$description" | sed -nE '/^[[:space:]]*[-*]?[[:space:]]*Integration Base([[:space:]]*:|[[:space:]]*$)/p' | wc -l | tr -d ' ')"
+  if [[ "$count" == "0" ]]; then
+    printf 'develop\n'
+    return 0
+  fi
+  [[ "$count" == "1" && "$(printf '%s\n' "$values" | wc -l | tr -d ' ')" == "1" ]] || {
+    dayflow_error 'Integration Base must appear once as an inline field'
+    return 1
+  }
+  value="$values"
+  [[ "$value" == "integration/private-two-person-cutover" ]] || {
+    dayflow_error 'Integration Base is not an allowed temporary integration branch'
+    return 1
+  }
+  printf '%s\n' "$value"
+}
+
 dayflow_validate_admission() {
   local issue_json="$1"
   local title description primary section content done_count
@@ -578,6 +603,7 @@ dayflow_validate_admission() {
     dayflow_error "unsupported Primary Agent: $primary"
     return 1
   }
+  dayflow_integration_base_branch "$description" >/dev/null || return 1
   done_count="$(dayflow_extract_section "$description" 'Done When' | awk '/^[[:space:]]*[-*][[:space:]]+/ {count++} END {print count+0}')"
   (( done_count >= 2 && done_count <= 5 )) || {
     dayflow_error 'Done When must contain 2 to 5 checks'
@@ -675,8 +701,9 @@ EOF
 
 dayflow_review_prompt() {
   local issue_key="$1"
+  local base_branch="$2"
   cat <<EOF
-Review the current ${issue_key} branch against origin/develop. Follow the repository review-agent definition and the single narrow checklist below. Do not edit files. Return only the requested structured review result. Classify actionable findings as P0, P1, P2, or P3. P0-P2 block merge readiness. Never dump a whole repository, large file, log, or recursive diff, and do not start MCP servers or connectors.
+Review the current ${issue_key} branch against origin/${base_branch}. Follow the repository review-agent definition and the single narrow checklist below. Do not edit files. Return only the requested structured review result. Classify actionable findings as P0, P1, P2, or P3. P0-P2 block merge readiness. Never dump a whole repository, large file, log, or recursive diff, and do not start MCP servers or connectors.
 
 Review agent definition:
 $(dayflow_agent_definition review-agent)
@@ -689,17 +716,19 @@ EOF
 dayflow_prepare_new_worktree() {
   local issue_key="$1"
   local branch="$2"
+  local base_branch="$3"
   local worktree="$DAYFLOW_WORKTREE_ROOT/$issue_key"
   [[ ! -e "$worktree" ]] || {
     dayflow_error "new Todo issue already has a worktree: $worktree"
     return 1
   }
-  git -C "$ROOT_DIR" fetch origin develop
+  dayflow_allowed_base_branch "$base_branch" || return 1
+  git -C "$ROOT_DIR" fetch origin "$base_branch"
   if git -C "$ROOT_DIR" show-ref --verify --quiet "refs/heads/$branch"; then
     dayflow_error "new Todo issue already has local branch: $branch"
     return 1
   fi
-  git -C "$ROOT_DIR" worktree add -b "$branch" "$worktree" origin/develop >&2
+  git -C "$ROOT_DIR" worktree add -b "$branch" "$worktree" "origin/$base_branch" >&2
   printf '%s\n' "$worktree"
 }
 
@@ -710,7 +739,7 @@ dayflow_validate_resume_state() {
   local expected_model="$4"
   local expected_reasoning="$5"
   local allow_dirty="${6:-false}"
-  local state_file worktree branch session_id persisted_agent persisted_model persisted_reasoning
+  local state_file worktree branch session_id persisted_agent persisted_model persisted_reasoning persisted_base
   state_file="$(dayflow_state_file "$issue_key")"
   [[ -f "$state_file" ]] || {
     dayflow_error "$issue_key cannot resume without local state"
@@ -721,6 +750,7 @@ dayflow_validate_resume_state() {
   persisted_agent="$(jq -r '.primary_agent // ""' "$state_file")"
   persisted_model="$(jq -r '.model // ""' "$state_file")"
   persisted_reasoning="$(jq -r '.reasoning // ""' "$state_file")"
+  persisted_base="$(jq -r '.base_branch // "develop"' "$state_file")"
   [[ -n "$worktree" && -e "$worktree/.git" && -n "$session_id" ]] || {
     dayflow_error "$issue_key resume state lacks a valid worktree or session"
     return 1
@@ -732,6 +762,10 @@ dayflow_validate_resume_state() {
   }
   [[ "$persisted_agent" == "$expected_agent" && "$persisted_model" == "$expected_model" && "$persisted_reasoning" == "$expected_reasoning" ]] || {
     dayflow_error "$issue_key resume ownership metadata no longer matches Linear routing"
+    return 1
+  }
+  [[ "$persisted_base" == "${7:-develop}" ]] || {
+    dayflow_error "$issue_key resume base branch no longer matches Linear metadata"
     return 1
   }
   [[ "$allow_dirty" == "true" || -z "$(git -C "$worktree" status --porcelain --untracked-files=normal)" ]] || {
@@ -756,7 +790,7 @@ dayflow_validate_pre_session_recovery() {
   local expected_agent="$3"
   local expected_model="$4"
   local expected_reasoning="$5"
-  local state_file worktree branch persisted_agent persisted_model persisted_reasoning commit_count
+  local state_file worktree branch persisted_agent persisted_model persisted_reasoning persisted_base commit_count base_branch
   state_file="$(dayflow_state_file "$issue_key")"
   dayflow_is_pre_session_recovery "$issue_key" || {
     dayflow_error "$issue_key is not in the recoverable pre-session state"
@@ -767,6 +801,8 @@ dayflow_validate_pre_session_recovery() {
   persisted_agent="$(jq -r '.primary_agent // ""' "$state_file")"
   persisted_model="$(jq -r '.model // ""' "$state_file")"
   persisted_reasoning="$(jq -r '.reasoning // ""' "$state_file")"
+  base_branch="${6:-develop}"
+  persisted_base="$(jq -r '.base_branch // "develop"' "$state_file")"
   [[ "$worktree" == "$DAYFLOW_WORKTREE_ROOT/$issue_key" && -e "$worktree/.git" ]] || {
     dayflow_error "$issue_key pre-session recovery worktree is not owned by this issue"
     return 1
@@ -780,13 +816,17 @@ dayflow_validate_pre_session_recovery() {
     dayflow_error "$issue_key pre-session recovery ownership metadata no longer matches Linear routing"
     return 1
   }
+  [[ "$persisted_base" == "$base_branch" ]] || {
+    dayflow_error "$issue_key pre-session recovery base branch no longer matches Linear metadata"
+    return 1
+  }
   [[ -z "$(git -C "$worktree" status --porcelain --untracked-files=normal)" ]] || {
     dayflow_error "$issue_key pre-session recovery worktree is not clean"
     return 1
   }
-  git -C "$ROOT_DIR" fetch origin develop >/dev/null
-  commit_count="$(git -C "$worktree" rev-list --count origin/develop..HEAD)"
-  [[ "$commit_count" == "0" ]] && git -C "$worktree" merge-base --is-ancestor HEAD origin/develop || {
+  git -C "$ROOT_DIR" fetch origin "$base_branch" >/dev/null
+  commit_count="$(git -C "$worktree" rev-list --count "origin/$base_branch..HEAD")"
+  [[ "$commit_count" == "0" ]] && git -C "$worktree" merge-base --is-ancestor HEAD "origin/$base_branch" || {
     dayflow_error "$issue_key pre-session recovery branch contains unowned commits"
     return 1
   }
@@ -1191,11 +1231,12 @@ dayflow_mark_running() {
   local reasoning="$6"
   local branch="$7"
   local worktree="$8"
+  local base_branch="$9"
   dayflow_state_update "$issue_key" \
     --arg issue "$issue_key" --arg id "$issue_id" --arg title "$title" --arg agent "$primary" \
-    --arg model "$model" --arg reasoning "$reasoning" --arg branch "$branch" --arg worktree "$worktree" \
+    --arg model "$model" --arg reasoning "$reasoning" --arg branch "$branch" --arg worktree "$worktree" --arg base "$base_branch" \
     --arg at "$(dayflow_now_iso)" \
-    '. + {issue: $issue, issue_id: $id, title: $title, primary_agent: $agent, model: $model, reasoning: $reasoning, branch: $branch, worktree: $worktree, status: "running", updated_at: $at, tokens_used: (.tokens_used // 0)}'
+    '. + {issue: $issue, issue_id: $id, title: $title, primary_agent: $agent, model: $model, reasoning: $reasoning, branch: $branch, base_branch: $base, worktree: $worktree, status: "running", updated_at: $at, tokens_used: (.tokens_used // 0)}'
 }
 
 dayflow_mark_publication_unsafe() {
@@ -1213,10 +1254,11 @@ dayflow_write_pr_proof() {
   local worktree="$3"
   local body_file="$4"
   local review_context="$5"
+  local base_branch="$6"
   local short_title files shortstat evidence
   short_title="$(printf '%s' "$title" | sed -E 's/^\[[^]]+\][[:space:]]*//')"
-  files="$(git -C "$worktree" diff --name-only origin/develop...HEAD | head -n 100)"
-  shortstat="$(git -C "$worktree" diff --shortstat origin/develop...HEAD | sed -E 's/^[[:space:]]+//')"
+  files="$(git -C "$worktree" diff --name-only "origin/$base_branch...HEAD" | head -n 100)"
+  shortstat="$(git -C "$worktree" diff --shortstat "origin/$base_branch...HEAD" | sed -E 's/^[[:space:]]+//')"
   [[ -n "$shortstat" ]] || shortstat='No textual diff statistics available.'
   evidence="$(jq -c '.test_evidence' "$(dayflow_state_file "$issue_key")")"
   {
@@ -1238,9 +1280,11 @@ dayflow_publish_issue_changes() {
   local branch="$2"
   local worktree="$3"
   local review_context="${4:-Not applicable before automated review.}"
-  local issue_key title commit_title body_file repo prs pr_number phase local_head remote_head remote_sha expected_subject pr_json
+  local issue_key title description base_branch commit_title body_file repo prs pr_number phase local_head remote_head remote_sha expected_subject pr_json
   issue_key="$(jq -r '.identifier' <<<"$issue_json")"
   title="$(jq -r '.title' <<<"$issue_json")"
+  description="$(jq -r '.description // ""' <<<"$issue_json")"
+  base_branch="$(dayflow_integration_base_branch "$description")" || return 1
   commit_title="$(printf '%s' "$title" | sed -E 's/^\[[^]]+\][[:space:]]*//' | cut -c1-68)"
   expected_subject="feat(${issue_key}): ${commit_title}"
   [[ "$worktree" == "$DAYFLOW_WORKTREE_ROOT/$issue_key" && "$(git -C "$worktree" branch --show-current)" == "$branch" ]] || {
@@ -1295,12 +1339,12 @@ dayflow_publish_issue_changes() {
 
   body_file="$DAYFLOW_LOG_ROOT/${issue_key}-pr-body.md"
   review_context="$(dayflow_state_value "$issue_key" '.publication.review_context // "Not applicable before automated review."')"
-  dayflow_write_pr_proof "$issue_key" "$title" "$worktree" "$body_file" "$review_context"
+  dayflow_write_pr_proof "$issue_key" "$title" "$worktree" "$body_file" "$review_context" "$base_branch"
   repo="$(dayflow_github_repo)"
   prs="$(dayflow_pr_for_branch "$branch" open)" || return 1
   pr_number="$(jq -r '.[0].number // empty' <<<"$prs")"
   if [[ -n "$pr_number" ]]; then
-    pr_json="$(jq -ce --arg branch "$branch" --arg head "$local_head" '.[0] | select(.headRefName == $branch and .baseRefName == "develop" and .headRefOid == $head)' <<<"$prs")" || {
+    pr_json="$(jq -ce --arg branch "$branch" --arg base "$base_branch" --arg head "$local_head" '.[0] | select(.headRefName == $branch and .baseRefName == $base and .headRefOid == $head)' <<<"$prs")" || {
       dayflow_mark_publication_unsafe "$issue_key" 'existing PR does not match publication branch, base, and head'
       return
     }
@@ -1309,11 +1353,11 @@ dayflow_publish_issue_changes() {
       dayflow_gh pr ready -R "$repo" --undo "$pr_number" >/dev/null || return 1
     fi
   else
-    dayflow_gh pr create -R "$repo" --draft --base develop --head "$branch" \
+    dayflow_gh pr create -R "$repo" --draft --base "$base_branch" --head "$branch" \
       --title "${issue_key}: ${commit_title}" --body-file "$body_file" >/dev/null || return 1
   fi
   dayflow_state_update "$issue_key" --arg at "$(dayflow_now_iso)" '.publication.phase = "pr-created" | .updated_at = $at'
-  dayflow_validate_delivery "$issue_key" "$branch" "$worktree"
+  dayflow_validate_delivery "$issue_key" "$branch" "$worktree" "$base_branch"
 }
 
 dayflow_validate_proof() {
@@ -1336,6 +1380,7 @@ dayflow_validate_delivery() {
   local issue_key="$1"
   local branch="$2"
   local worktree="$3"
+  local base_branch="$4"
   local current_branch commit_count local_head remote_head remote_sha pr_head prs pr_json body
   current_branch="$(git -C "$worktree" branch --show-current)"
   [[ "$current_branch" == "$branch" ]] || {
@@ -1346,9 +1391,10 @@ dayflow_validate_delivery() {
     dayflow_error 'delivery worktree is dirty'
     return 1
   }
-  commit_count="$(git -C "$worktree" rev-list --count origin/develop..HEAD)"
+  dayflow_allowed_base_branch "$base_branch" || return 1
+  commit_count="$(git -C "$worktree" rev-list --count "origin/$base_branch..HEAD")"
   (( commit_count > 0 )) || {
-    dayflow_error 'delivery has no commits beyond origin/develop'
+    dayflow_error "delivery has no commits beyond origin/$base_branch"
     return 1
   }
   remote_head="$(git -C "$worktree" ls-remote --heads origin "refs/heads/$branch")"
@@ -1359,8 +1405,8 @@ dayflow_validate_delivery() {
   local_head="$(git -C "$worktree" rev-parse HEAD)"
   remote_sha="$(awk 'NR == 1 {print $1}' <<<"$remote_head")"
   prs="$(dayflow_pr_for_branch "$branch" open)"
-  pr_json="$(jq -ce '.[0] | select(.baseRefName == "develop")' <<<"$prs")" || {
-    dayflow_error 'delivery has no open PR targeting develop'
+  pr_json="$(jq -ce --arg base "$base_branch" '.[0] | select(.baseRefName == $base)' <<<"$prs")" || {
+    dayflow_error "delivery has no open PR targeting $base_branch"
     return 1
   }
   pr_head="$(jq -r '.headRefOid // ""' <<<"$pr_json")"
@@ -1521,7 +1567,7 @@ dayflow_record_merge_ready() {
 
 dayflow_reconcile_one() {
   local issue_key="$1"
-  local state_file issue_json issue_id branch prs pr_json pr_number pr_url head_sha reviewed_head_sha
+  local state_file issue_json issue_id branch expected_base persisted_base prs pr_json pr_number pr_url head_sha reviewed_head_sha
   local is_draft pr_state current_state base_branch head_branch merge_state requested_changes
   state_file="$(dayflow_state_file "$issue_key")"
   [[ -f "$state_file" ]] || {
@@ -1531,7 +1577,13 @@ dayflow_reconcile_one() {
   issue_json="$(dayflow_linear_issue "$issue_key")" || return 1
   issue_id="$(jq -r '.id' <<<"$issue_json")"
   current_state="$(jq -r '.state.name' <<<"$issue_json")"
+  expected_base="$(dayflow_integration_base_branch "$(jq -r '.description // ""' <<<"$issue_json")")" || return 1
   branch="$(jq -r '.branch // ""' "$state_file")"
+  persisted_base="$(jq -r '.base_branch // "develop"' "$state_file")"
+  [[ "$persisted_base" == "$expected_base" ]] || {
+    dayflow_error "$issue_key persisted base branch no longer matches Linear metadata"
+    return 1
+  }
   [[ -n "$branch" ]] || return 0
   prs="$(dayflow_pr_for_branch "$branch" all)"
   pr_json="$(jq -c '.[0] // empty' <<<"$prs")"
@@ -1546,8 +1598,8 @@ dayflow_reconcile_one() {
   merge_state="$(jq -r '.mergeStateStatus // "UNKNOWN"' <<<"$pr_json")"
   reviewed_head_sha="$(jq -r '.reviewed_head_sha // ""' "$state_file")"
 
-  [[ "$base_branch" == "develop" && "$head_branch" == "$branch" ]] || {
-    dayflow_error "$issue_key PR is not the tracked develop delivery"
+  [[ "$base_branch" == "$expected_base" && "$head_branch" == "$branch" ]] || {
+    dayflow_error "$issue_key PR is not the tracked base delivery"
     return 1
   }
 
@@ -1561,9 +1613,6 @@ dayflow_reconcile_one() {
     if ! dayflow_linear_set_state "$issue_id" "$DAYFLOW_STATE_DONE_NAME"; then
       dayflow_error "$issue_key Linear rejected the Done transition"
       return 1
-    fi
-    if [[ "$current_state" != "$DAYFLOW_STATE_DONE_NAME" ]]; then
-      dayflow_notify_state "$issue_key" "$DAYFLOW_STATE_DONE_NAME" "PR #${pr_number} merged into develop."
     fi
     dayflow_state_update "$issue_key" --arg at "$(dayflow_now_iso)" '.status = "done" | .updated_at = $at'
     return 0
@@ -1613,7 +1662,7 @@ dayflow_reconcile_one() {
 
 dayflow_run_issue() {
   local issue_key="$1"
-  local issue_json issue_id title description linear_state primary model_route model reasoning branch worktree session_id mode
+  local issue_json issue_id title description linear_state primary model_route model reasoning branch base_branch worktree session_id mode
   local timestamp prompt_file log_file output_file pr_json pr_number review_prompt review_log review_output
   local review_round=1 findings_comment remediation_prompt remediation_log remediation_output repo
   local pre_session_recovery=false publication_recovery=false requested_changes_recovery=false recovery_status=""
@@ -1632,6 +1681,7 @@ dayflow_run_issue() {
   description="$(jq -r '.description' <<<"$issue_json")"
   linear_state="$(jq -r '.state.name' <<<"$issue_json")"
   primary="$(dayflow_primary_agent "$description")"
+  base_branch="$(dayflow_integration_base_branch "$description")" || return 1
   model_route="$(dayflow_model_for_agent "$primary")"
   read -r model reasoning <<<"$model_route"
   branch="$(dayflow_branch_name "$issue_key" "$title")"
@@ -1652,11 +1702,11 @@ dayflow_run_issue() {
 
   if [[ "$DAYFLOW_DRY_RUN" == "true" ]]; then
     if [[ "$publication_recovery" == "true" || "$requested_changes_recovery" == "true" ]]; then
-      dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" true >/dev/null || return 1
+      dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" true "$base_branch" >/dev/null || return 1
     elif [[ "$pre_session_recovery" == "true" ]]; then
       case "$linear_state" in
         "$DAYFLOW_STATE_TODO_NAME"|"$DAYFLOW_STATE_BLOCKED_NAME"|"$DAYFLOW_STATE_IN_PROGRESS_NAME")
-          dayflow_validate_pre_session_recovery "$issue_key" "$branch" "$primary" "$model" "$reasoning" >/dev/null || return 1
+          dayflow_validate_pre_session_recovery "$issue_key" "$branch" "$primary" "$model" "$reasoning" "$base_branch" >/dev/null || return 1
           ;;
         *) dayflow_error "pre-session recovery is not runnable from issue state: $linear_state"; return 1 ;;
       esac
@@ -1664,15 +1714,15 @@ dayflow_run_issue() {
       case "$linear_state" in
         "$DAYFLOW_STATE_TODO_NAME") ;;
         "$DAYFLOW_STATE_IN_PROGRESS_NAME"|"$DAYFLOW_STATE_IN_REVIEW_NAME")
-          dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" >/dev/null || return 1
+          dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" false "$base_branch" >/dev/null || return 1
           ;;
         *) dayflow_error "issue state is not runnable: $linear_state"; return 1 ;;
       esac
     fi
     jq -n --arg issue "$issue_key" --arg state "$linear_state" --arg agent "$primary" \
-      --arg model "$model" --arg reasoning "$reasoning" --arg branch "$branch" \
+      --arg model "$model" --arg reasoning "$reasoning" --arg branch "$branch" --arg base "$base_branch" \
       --argjson recovery "$pre_session_recovery" \
-      '{dry_run: true, issue: $issue, state: $state, primary_agent: $agent, model: $model, reasoning: $reasoning, branch: $branch, pre_session_recovery: $recovery}'
+      '{dry_run: true, issue: $issue, state: $state, primary_agent: $agent, model: $model, reasoning: $reasoning, branch: $branch, base_branch: $base, pre_session_recovery: $recovery}'
     return 0
   fi
 
@@ -1683,7 +1733,7 @@ dayflow_run_issue() {
       "$DAYFLOW_STATE_TODO_NAME"|"$DAYFLOW_STATE_BLOCKED_NAME"|"$DAYFLOW_STATE_IN_PROGRESS_NAME"|"$DAYFLOW_STATE_IN_REVIEW_NAME") ;;
       *) dayflow_error "publication recovery is not runnable from issue state: $linear_state"; return 1 ;;
     esac
-    worktree="$(dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" true)" || return 1
+    worktree="$(dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" true "$base_branch")" || return 1
     session_id="$(dayflow_state_value "$issue_key" '.session_id')"
     mode="primary-resume"
   elif [[ "$requested_changes_recovery" == "true" ]]; then
@@ -1691,7 +1741,7 @@ dayflow_run_issue() {
       "$DAYFLOW_STATE_TODO_NAME"|"$DAYFLOW_STATE_IN_PROGRESS_NAME"|"$DAYFLOW_STATE_IN_REVIEW_NAME") ;;
       *) dayflow_error "requested-changes recovery is not runnable from issue state: $linear_state"; return 1 ;;
     esac
-    worktree="$(dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning")" || return 1
+    worktree="$(dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" false "$base_branch")" || return 1
     session_id="$(dayflow_state_value "$issue_key" '.session_id')"
     mode="primary-resume"
   elif dayflow_is_pre_session_recovery "$issue_key"; then
@@ -1699,18 +1749,18 @@ dayflow_run_issue() {
       "$DAYFLOW_STATE_TODO_NAME"|"$DAYFLOW_STATE_BLOCKED_NAME"|"$DAYFLOW_STATE_IN_PROGRESS_NAME") ;;
       *) dayflow_error "pre-session recovery is not runnable from issue state: $linear_state"; return 1 ;;
     esac
-    worktree="$(dayflow_validate_pre_session_recovery "$issue_key" "$branch" "$primary" "$model" "$reasoning")" || return 1
+    worktree="$(dayflow_validate_pre_session_recovery "$issue_key" "$branch" "$primary" "$model" "$reasoning" "$base_branch")" || return 1
     session_id=""
     mode="primary-new"
   else
     case "$linear_state" in
       "$DAYFLOW_STATE_TODO_NAME")
-        worktree="$(dayflow_prepare_new_worktree "$issue_key" "$branch")" || return 1
+        worktree="$(dayflow_prepare_new_worktree "$issue_key" "$branch" "$base_branch")" || return 1
         session_id=""
         mode="primary-new"
         ;;
       "$DAYFLOW_STATE_IN_PROGRESS_NAME"|"$DAYFLOW_STATE_IN_REVIEW_NAME")
-        worktree="$(dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning")" || return 1
+        worktree="$(dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" false "$base_branch")" || return 1
         session_id="$(dayflow_state_value "$issue_key" '.session_id')"
         mode="primary-resume"
         ;;
@@ -1722,7 +1772,7 @@ dayflow_run_issue() {
   fi
 
   if [[ -z "$recovery_status" ]]; then
-    dayflow_mark_running "$issue_key" "$issue_id" "$title" "$primary" "$model" "$reasoning" "$branch" "$worktree"
+    dayflow_mark_running "$issue_key" "$issue_id" "$title" "$primary" "$model" "$reasoning" "$branch" "$worktree" "$base_branch"
   fi
   if ! dayflow_validate_publication_capability "$worktree" "$branch"; then
     if [[ -n "$recovery_status" ]]; then
@@ -1747,7 +1797,7 @@ dayflow_run_issue() {
     return 1
   fi
   if [[ -n "$recovery_status" ]]; then
-    dayflow_mark_running "$issue_key" "$issue_id" "$title" "$primary" "$model" "$reasoning" "$branch" "$worktree"
+    dayflow_mark_running "$issue_key" "$issue_id" "$title" "$primary" "$model" "$reasoning" "$branch" "$worktree" "$base_branch"
   fi
   if [[ "$publication_recovery" != "true" ]]; then
     dayflow_notify_state "$issue_key" "$DAYFLOW_STATE_IN_PROGRESS_NAME" "Primary agent ${primary} started with ${model}/${reasoning}."
@@ -1809,8 +1859,8 @@ dayflow_run_issue() {
     review_prompt="$DAYFLOW_LOG_ROOT/${issue_key}-${timestamp}-review-${review_round}.prompt"
     review_log="$DAYFLOW_LOG_ROOT/${issue_key}-${timestamp}-review-${review_round}.jsonl"
     review_output="$DAYFLOW_LOG_ROOT/${issue_key}-${timestamp}-review-${review_round}.json"
-    dayflow_review_prompt "$issue_key" >"$review_prompt"
-    if ! dayflow_execute_bounded "$issue_key" review "$worktree" gpt-5.6-sol high "" "$review_prompt" "$review_log" "$review_output"; then
+    dayflow_review_prompt "$issue_key" "$base_branch" >"$review_prompt"
+    if ! dayflow_execute_bounded "$issue_key" review "$worktree" gpt-5.6-terra high "" "$review_prompt" "$review_log" "$review_output"; then
       dayflow_block_issue "$issue_json" "$DAYFLOW_EXECUTION_ERROR"
       return 1
     fi
@@ -1860,7 +1910,7 @@ dayflow_run_issue() {
     review_round=$((review_round + 1))
   done
 
-  pr_json="$(dayflow_validate_delivery "$issue_key" "$branch" "$worktree")" || {
+  pr_json="$(dayflow_validate_delivery "$issue_key" "$branch" "$worktree" "$base_branch")" || {
     dayflow_block_issue "$issue_json" 'Delivery head changed after automated review; rereview required.'
     return 1
   }

@@ -33,7 +33,7 @@ One Primary Agent owns an issue through review follow-up. The orchestrator selec
 - `In Progress`: active ownership; resume requires valid local state, worktree, branch, and session.
 - `In Review`: a ready PR exists; requested changes return ownership to `In Progress`.
 - `Blocked`: admission, model, resource, runtime, or delivery guards stopped the issue without discarding work.
-- `Done`: the develop-targeted PR was merged.
+- `Done`: the declared-base PR was merged.
 
 The lifecycle is `Todo -> In Progress -> In Review -> merge-ready -> Done`. `reconcile` owns PR-driven state changes; the model never mutates lifecycle state directly.
 
@@ -60,9 +60,9 @@ Admission requires:
 Delivery requires:
 
 - `feature/tasks-<number>-<slug>` checked out in `.dayflow/worktrees/CEN-N`
-- at least one commit beyond `origin/develop`
+- at least one commit beyond the declared `origin/<base>`
 - branch pushed to origin
-- open PR targeting `develop`
+- open PR targeting the declared base
 - all proof headings populated
 - no P0-P2 finding after at most one same-session remediation
 - validated structured evidence for 1-8 passed tests
@@ -71,7 +71,7 @@ Codex subprocesses receive no Linear, GitHub, or Discord credential variables. P
 
 ## Model and Resource Policy
 
-`product-agent`, `integration-agent`, and `review-agent` use `gpt-5.6-sol/high`. `backend-agent` and `ios-agent` use `gpt-5.6-terra/medium`. There is no implicit fallback.
+`product-agent`, `integration-agent`, and `review-agent` use `gpt-5.6-terra/high`. `backend-agent` and `ios-agent` use `gpt-5.6-terra/medium`. There is no fallback.
 
 The default execution sandbox is `workspace-write`, approval policy is `never`, and review is read-only. The aggregate issue token limit is 120K; prompt, command-output, no-progress, and wall-clock bounds are enforced by the runner. Supervisor dispatch inherits these per-issue limits and does not create a separate token budget. Breaches terminate the child process, preserve state, and block the issue.
 
@@ -81,13 +81,13 @@ The default execution sandbox is `workspace-write`, approval policy is `never`, 
 - open ready PR: `In Review`
 - current requested changes: draft PR plus `In Progress`
 - ready PR with green checks: one merge-ready notification per head SHA
-- merged PR: `Done` plus completion notification
+- merged PR: local `Done` convergence; the hosted claim-marked lifecycle sends the sole completion notification
 
 Runner `status` is read-only. Runner `reconcile [CEN-N]` handles one issue and runner `reconcile` handles all locally owned issues. Supervisor `reconcile` combines claim recovery with that all-issue reconciliation; supervisor `cleanup` performs only guarded local cleanup. `start` atomically captures `LINEAR_API_KEY` and effective `PATH` in canonical `.dayflow/supervisor.env` before loading the per-user `launchd` job; `stop` unloads it, and supervisor `status` reports scheduling, snapshot, and claims without exposing the environment or dispatching work.
 
 ### Merged PR event closure
 
-`.github/workflows/merge-lifecycle.yml` runs when a pull request closes. The deterministic reconciler accepts only a merged, `develop`-targeted PR whose repository-owned head matches `feature/tasks-N-<slug>`. It derives `CEN-N` from that branch, reads the issue from Linear, and moves it to `Done` only when it is not already there.
+`.github/workflows/merge-lifecycle.yml` runs when a pull request closes. The deterministic reconciler accepts only a merged PR targeting `develop` or the exact temporary `integration/private-two-person-cutover` base whose repository-owned head matches `feature/tasks-N-<slug>`. It derives `CEN-N` from that branch, reads the issue from Linear, and moves it to `Done` only when it is not already there. The final integration-to-`develop` PR cannot match the task-head contract and never closes a CEN task.
 
 Before changing Linear or calling Discord, the workflow creates a hidden claim marker in a PR comment and captures that comment ID. It then converges Linear to `Done`, delivers Discord, and patches the same comment to `delivered`. A delivered marker makes replays a clean no-op. An unresolved claim fails closed without another Discord call and requires an operator to reconcile whether delivery occurred.
 
@@ -95,7 +95,7 @@ A definite non-2xx Discord response changes the claim to `retryable` and fails t
 
 The repository setting **Settings > General > Pull Requests > Automatically delete head branches** owns remote feature-branch deletion. The workflow relies only on the immutable event payload and the merged base branch, so deletion may happen before reconciliation without losing the `CEN-N` mapping. The workflow never calls the Git ref deletion API.
 
-GitHub-hosted reconciliation does not access `.dayflow/` and never removes a local worktree. Local supervisor reconciliation and cleanup are deliberately ordered before queue selection so merged blockers can release dependent work. Cleanup fetches/prunes and removes only an exact owned worktree after runner status proves `Done`, the tracked PR is merged into `develop`, and the worktree is clean. Dirty workspaces are preserved, and CEN-28 is always excluded from supervisor cleanup.
+GitHub-hosted reconciliation does not access `.dayflow/` and never removes a local worktree. Local supervisor reconciliation and cleanup are deliberately ordered before queue selection so merged blockers can release dependent work. Cleanup fetches/prunes and removes only an exact owned worktree after runner status proves `Done`, the tracked PR is merged into its persisted declared base, and the worktree is clean. Dirty workspaces are preserved, and CEN-28 is always excluded from supervisor cleanup.
 
 ## Repository Truth
 

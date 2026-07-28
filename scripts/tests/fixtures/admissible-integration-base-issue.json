@@ -1,0 +1,7 @@
+{
+  "id": "issue-29",
+  "identifier": "CEN-29",
+  "title": "[Integration] Verify temporary integration base",
+  "description": "Goal:\n- Verify the temporary cutover delivery path.\n\nPrimary Agent:\n- integration-agent\n\nIntegration Base: integration/private-two-person-cutover\n\nInputs:\n- docs/automation-model.md\n\nDone When:\n- The branch starts from the declared base.\n- The delivery PR targets the declared base.\n\nOut of Scope:\n- Any deploy change.",
+  "state": {"id": "state-todo", "name": "Todo"}
+}

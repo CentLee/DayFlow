@@ -75,7 +75,7 @@ If any of those are missing, block or clarify instead of expanding scope during 
 
 Match model strength to task leverage:
 
-- `gpt-5.6-sol` with `high` reasoning for `product-agent`, `integration-agent`, and `review-agent`
+- `gpt-5.6-terra` with `high` reasoning for `product-agent`, `integration-agent`, and `review-agent`
 - `gpt-5.6-terra` with `medium` reasoning for `backend-agent` and `ios-agent`
 - escalate implementation work to a stronger model only when contracts, product rules, or risk analysis are still ambiguous
 - do not fall back implicitly when the configured model is rejected

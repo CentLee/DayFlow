@@ -52,7 +52,7 @@ if git ls-files | rg -q '^(\.dayflow|\.symphony)/'; then
 fi
 
 rg -q 'product-agent\|integration-agent\|review-agent' scripts/lib/dayflow_runner.sh
-rg -q 'gpt-5\.6-sol high' scripts/lib/dayflow_runner.sh
+rg -q 'gpt-5\.6-terra high' scripts/lib/dayflow_runner.sh
 rg -q 'backend-agent\|ios-agent' scripts/lib/dayflow_runner.sh
 rg -q 'gpt-5\.6-terra medium' scripts/lib/dayflow_runner.sh
 for supervisor_command in once start stop status reconcile cleanup; do

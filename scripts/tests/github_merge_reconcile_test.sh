@@ -31,7 +31,7 @@ reset_fakes() {
   rm -f "$FAKE_MERGE_CURL_LOG" "$FAKE_LINEAR_STATE_FILE" "$FAKE_LINEAR_REQUEST_COUNT" \
     "$FAKE_LINEAR_MUTATION_COUNT" "$FAKE_GITHUB_MARKER_FILE" "$FAKE_GITHUB_COMMENT_COUNT" \
     "$FAKE_GITHUB_COMMENT_UPDATE_COUNT" "$FAKE_DISCORD_COUNT" "$FAKE_DISCORD_FAILURES_FILE"
-  unset FAKE_LINEAR_MUTATION_FAIL FAKE_LINEAR_MALFORMED_QUERY FAKE_GITHUB_CLAIM_CREATE_FAIL FAKE_GITHUB_LIST_FAIL \
+  unset FAKE_LINEAR_MUTATION_FAIL FAKE_LINEAR_MALFORMED_QUERY FAKE_LINEAR_DESCRIPTION FAKE_GITHUB_CLAIM_CREATE_FAIL FAKE_GITHUB_LIST_FAIL \
     FAKE_GITHUB_DELIVERED_UPDATE_FAIL FAKE_GITHUB_CONCURRENT_CLAIM FAKE_DISCORD_TRANSPORT_FAIL
 }
 
@@ -72,6 +72,47 @@ assert_eq '1' "$(counter_value "$FAKE_GITHUB_COMMENT_COUNT")" 'eligible merge cr
 assert_eq '1' "$(counter_value "$FAKE_GITHUB_COMMENT_UPDATE_COUNT")" 'eligible merge patches its claim once'
 assert_eq '1' "$(marker_count delivered)" 'eligible merge records a v2 delivered marker'
 assert_eq '0' "$(marker_count claimed)" 'eligible merge leaves no unresolved claim'
+
+reset_fakes
+integration_event="$TEST_TMP/integration-base.json"
+jq '.pull_request.base.ref = "integration/private-two-person-cutover"' "$valid_event" >"$integration_event"
+export FAKE_LINEAR_DESCRIPTION='Integration Base: integration/private-two-person-cutover'
+run_event "$integration_event" >/dev/null
+assert_eq 'Done' "$(<"$FAKE_LINEAR_STATE_FILE")" 'eligible integration-base merge transitions Linear to Done'
+assert_eq '1' "$(counter_value "$FAKE_DISCORD_COUNT")" 'eligible integration-base merge sends one completion notification'
+
+reset_fakes
+export FAKE_LINEAR_DESCRIPTION='Integration Base: integration/private-two-person-cutover'
+if run_event "$valid_event" >"$TEST_TMP/base-mismatch.log" 2>&1; then
+  test_fail 'develop merge with integration metadata must fail closed'
+fi
+assert_eq '0' "$(counter_value "$FAKE_LINEAR_MUTATION_COUNT")" 'base mismatch does not mutate Linear'
+assert_eq '0' "$(counter_value "$FAKE_DISCORD_COUNT")" 'base mismatch does not call Discord'
+assert_eq '1' "$(marker_count retryable)" 'base mismatch releases its claim for retry'
+
+reset_fakes
+export FAKE_LINEAR_DESCRIPTION='Integration Base:'
+if run_event "$integration_event" >"$TEST_TMP/empty-base.log" 2>&1; then
+  test_fail 'empty Integration Base must fail closed'
+fi
+assert_eq '0' "$(counter_value "$FAKE_LINEAR_MUTATION_COUNT")" 'empty Integration Base does not mutate Linear'
+assert_eq '0' "$(counter_value "$FAKE_DISCORD_COUNT")" 'empty Integration Base does not call Discord'
+assert_eq '1' "$(marker_count retryable)" 'empty Integration Base releases its claim for retry'
+
+reset_fakes
+export FAKE_LINEAR_DESCRIPTION=$'Integration Base: integration/private-two-person-cutover\nIntegration Base: integration/private-two-person-cutover'
+if run_event "$integration_event" >"$TEST_TMP/duplicate-base.log" 2>&1; then
+  test_fail 'duplicate Integration Base must fail closed'
+fi
+assert_eq '0' "$(counter_value "$FAKE_LINEAR_MUTATION_COUNT")" 'duplicate Integration Base does not mutate Linear'
+assert_eq '0' "$(counter_value "$FAKE_DISCORD_COUNT")" 'duplicate Integration Base does not call Discord'
+assert_eq '1' "$(marker_count retryable)" 'duplicate Integration Base releases its claim for retry'
+
+reset_fakes
+final_cutover_event="$TEST_TMP/final-cutover.json"
+jq '.pull_request.head.ref = "integration/private-two-person-cutover"' "$valid_event" >"$final_cutover_event"
+run_event "$final_cutover_event" >/dev/null
+assert_no_external_calls 'final integration-to-develop cutover'
 
 run_event "$valid_event" >/dev/null
 assert_eq '1' "$(counter_value "$FAKE_LINEAR_MUTATION_COUNT")" 'replayed merge does not repeat Done mutation'
@@ -229,7 +270,7 @@ assert_eq 'preserve me' "$(<"$runtime_marker")" 'remote branch deletion path nev
 assert_failure 'merge reconciler never calls a remote branch API' rg -q '/git/refs/' "$FAKE_MERGE_CURL_LOG"
 
 assert_file_contains "$SOURCE_ROOT/.github/workflows/merge-lifecycle.yml" 'types: \[closed\]' 'workflow listens for closed PR events'
-assert_file_contains "$SOURCE_ROOT/.github/workflows/merge-lifecycle.yml" 'branches: \[develop\]' 'workflow filters to develop PRs'
+assert_file_contains "$SOURCE_ROOT/.github/workflows/merge-lifecycle.yml" 'branches: \[develop, integration/private-two-person-cutover\]' 'workflow filters to both allowed base branches'
 assert_file_contains "$SOURCE_ROOT/.github/workflows/merge-lifecycle.yml" 'if: github.event.pull_request.merged == true' 'workflow skips unmerged PRs before secret use'
 assert_file_contains "$SOURCE_ROOT/.github/workflows/merge-lifecycle.yml" 'cancel-in-progress: false' 'workflow serializes retries without cancellation'
 assert_file_contains "$SOURCE_ROOT/.github/workflows/merge-lifecycle.yml" 'LINEAR_API_KEY:.*secrets.LINEAR_API_KEY' 'workflow wires Linear secret'

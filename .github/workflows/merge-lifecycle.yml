@@ -3,7 +3,7 @@ name: Merge Lifecycle Reconcile
 on:
   pull_request:
     types: [closed]
-    branches: [develop]
+    branches: [develop, integration/private-two-person-cutover]
 
 permissions:
   contents: read

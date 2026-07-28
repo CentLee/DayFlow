@@ -65,6 +65,21 @@ dayflow_notification_marker() {
     "$issue_key" "$pr_number" "$state"
 }
 
+dayflow_declared_base_branch() {
+  local description="$1"
+  local values count value
+  values="$(printf '%s\n' "$description" | sed -nE 's/^[[:space:]]*[-*]?[[:space:]]*Integration Base:[[:space:]]*(.*[^[:space:]])[[:space:]]*$/\1/p')"
+  count="$(printf '%s\n' "$description" | sed -nE '/^[[:space:]]*[-*]?[[:space:]]*Integration Base([[:space:]]*:|[[:space:]]*$)/p' | wc -l | tr -d ' ')"
+  if [[ "$count" == "0" ]]; then
+    printf 'develop\n'
+    return 0
+  fi
+  [[ "$count" == "1" && "$(printf '%s\n' "$values" | wc -l | tr -d ' ')" == "1" ]] || return 1
+  value="$values"
+  [[ "$value" == "integration/private-two-person-cutover" ]] || return 1
+  printf '%s\n' "$value"
+}
+
 dayflow_github_notification_state() {
   local repository="$1"
   local pr_number="$2"
@@ -173,7 +188,10 @@ pr_number="$(jq -r '
   if type == "number" and . > 0 and floor == . then tostring else "" end
 ' "$event_path")"
 
-[[ "$base_branch" == "develop" ]] || dayflow_noop 'merged pull request does not target develop'
+case "$base_branch" in
+  develop|integration/private-two-person-cutover) ;;
+  *) dayflow_noop 'merged pull request does not target an allowed DayFlow base branch' ;;
+esac
 [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || dayflow_noop 'event repository is malformed'
 [[ "$head_repository" == "$repository" ]] || dayflow_noop 'merged pull request head is not a repository-owned branch'
 [[ -z "${GITHUB_REPOSITORY:-}" || "$repository" == "$GITHUB_REPOSITORY" ]] || dayflow_noop 'event repository does not match the workflow repository'
@@ -258,7 +276,7 @@ dayflow_fail_before_discord() {
   exit 1
 }
 
-issue_query='query MergeReconcileIssue($issueId: String!) { issue(id: $issueId) { id identifier state { name } team { states { nodes { id name } } } } }'
+issue_query='query MergeReconcileIssue($issueId: String!) { issue(id: $issueId) { id identifier description state { name } team { states { nodes { id name } } } } }'
 issue_variables="$(jq -cn --arg issue_id "$issue_key" '{issueId: $issue_id}')"
 issue_response="$(dayflow_linear_request "$issue_query" "$issue_variables")" || {
   dayflow_fail_before_discord "unable to read ${issue_key} from Linear" \
@@ -285,6 +303,18 @@ if ! linear_fields="$(jq -er --arg issue_key "$issue_key" --arg done_name "$DAYF
     'Linear validation failed before Discord delivery; this claim is safe to retry.'
 fi
 IFS=$'\t' read -r linear_issue_id linear_identifier linear_state done_state_id <<<"$linear_fields"
+linear_description="$(jq -er '.data.issue.description // "" | select(type == "string")' <<<"$issue_response")" || {
+  dayflow_fail_before_discord "Linear issue description did not match ${issue_key}" \
+    'Linear validation failed before Discord delivery; this claim is safe to retry.'
+}
+declared_base="$(dayflow_declared_base_branch "$linear_description")" || {
+  dayflow_fail_before_discord "Linear Integration Base metadata is invalid for ${issue_key}" \
+    'Linear validation failed before Discord delivery; this claim is safe to retry.'
+}
+[[ "$declared_base" == "$base_branch" ]] || {
+  dayflow_fail_before_discord "Linear Integration Base does not match the merged PR for ${issue_key}" \
+    'Linear validation failed before Discord delivery; this claim is safe to retry.'
+}
 
 if [[ "$linear_state" != "$DAYFLOW_LINEAR_DONE_STATE" ]]; then
   mutation='mutation UpdateIssueState($issueId: String!, $stateId: String!) { issueUpdate(id: $issueId, input: { stateId: $stateId }) { success issue { id state { name } } } }'
@@ -305,7 +335,7 @@ else
   dayflow_log "${issue_key} is already ${DAYFLOW_LINEAR_DONE_STATE}"
 fi
 
-notification_body="$(printf 'PR #%s merged into develop.\n%s' "$pr_number" "$pr_url")"
+notification_body="$(printf 'PR #%s merged into %s.\n%s' "$pr_number" "$base_branch" "$pr_url")"
 discord_payload="$(jq -cn --arg title "DayFlow ${issue_key} -> Done" --arg description "$notification_body" \
   '{embeds: [{title: $title, description: $description, color: 5763719}], allowed_mentions: {parse: []}}')"
 if discord_http_status="$("$DAYFLOW_CURL_BIN" -sS --output /dev/null --write-out '%{http_code}' \

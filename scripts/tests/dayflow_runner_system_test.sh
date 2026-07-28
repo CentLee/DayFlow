@@ -23,7 +23,7 @@ printf '%s\n' '2' >"$FAKE_GH_PENDING_COUNT_FILE"
 state_file="$DAYFLOW_STATE_ROOT/CEN-29.json"
 assert_eq 'merge-ready' "$(jq -r '.status' "$state_file")" 'system lifecycle result'
 assert_eq 'fake-primary-session' "$(jq -r '.session_id' "$state_file")" 'primary session persistence'
-assert_eq 'gpt-5.6-sol' "$(jq -r '.model' "$state_file")" 'model persistence'
+assert_eq 'gpt-5.6-terra' "$(jq -r '.model' "$state_file")" 'model persistence'
 assert_eq "$(git -C "$DAYFLOW_WORKTREE_ROOT/CEN-29" rev-parse HEAD)" "$(jq -r '.reviewed_head_sha' "$state_file")" 'reviewed head persistence'
 assert_success 'remote issue branch exists' git -C "$seed" ls-remote --exit-code --heads origin refs/heads/feature/tasks-29-replace-symphony-with-dayflow-local-runner
 assert_file_contains "$FAKE_GH_LOG" 'ready' 'PR was marked ready'
