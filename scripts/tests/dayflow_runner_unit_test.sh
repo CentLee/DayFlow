@@ -197,9 +197,10 @@ cat >"$usage_log" <<'EOF'
 {"usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10}}
 {"event":{"usage":{"input_tokens":200,"cached_input_tokens":150,"output_tokens":20}}}
 EOF
-assert_eq '220' "$(dayflow_jsonl_tokens "$usage_log")" 'repeated cumulative usage snapshots are not summed'
+assert_eq '220' "$(dayflow_jsonl_usage "$usage_log" | jq -r '.raw_total_tokens')" 'repeated cumulative usage snapshots retain raw totals'
 assert_eq '150' "$(dayflow_jsonl_usage "$usage_log" | jq -r '.cached_input_tokens')" 'cached cumulative usage'
 assert_eq '50' "$(dayflow_jsonl_usage "$usage_log" | jq -r '.uncached_input_tokens')" 'uncached cumulative usage'
+assert_eq '70' "$(dayflow_jsonl_billable_tokens "$usage_log")" 'billable usage excludes cached context'
 
 resume_repo="$TEST_TMP/resume-repo"
 mkdir -p "$resume_repo"
@@ -221,9 +222,11 @@ printf '%s\n' '999999' >"$DAYFLOW_STATE_ROOT/CEN-29.lock/pid"
 assert_success 'stale lock recovery' dayflow_acquire_lock CEN-29
 dayflow_release_lock
 
-printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-29.json"
+printf '%s\n' '{"billable_tokens":0}' >"$DAYFLOW_STATE_ROOT/CEN-29.json"
 prompt="$TEST_TMP/prompt"
 output="$TEST_TMP/output"
+execution_worktree="$TEST_TMP/execution-worktree"
+mkdir -p "$execution_worktree"
 printf '%s\n' 'test' >"$prompt"
 
 export FAKE_CODEX_MODE=token-limit
@@ -231,80 +234,108 @@ DAYFLOW_TOKEN_LIMIT=10
 DAYFLOW_STALL_LIMIT_SECONDS=10
 DAYFLOW_EXECUTION_LIMIT_SECONDS=10
 DAYFLOW_MONITOR_INTERVAL_SECONDS=0.1
-if dayflow_execute_bounded CEN-29 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/token.jsonl" "$output"; then
+if dayflow_execute_bounded CEN-29 primary-new "$execution_worktree" fake-model medium '' "$prompt" "$TEST_TMP/token.jsonl" "$output"; then
   test_fail 'token limit execution should fail'
 fi
 assert_eq 'token limit exceeded (10)' "$DAYFLOW_EXECUTION_ERROR" 'token limit reason'
 
-printf '%s\n' '{"tokens_used":10}' >"$DAYFLOW_STATE_ROOT/CEN-32.json"
+printf '%s\n' '{"billable_tokens":10}' >"$DAYFLOW_STATE_ROOT/CEN-32.json"
 export FAKE_CODEX_INVOCATION_COUNT_FILE="$TEST_TMP/prelaunch-count"
 export FAKE_CODEX_MODE=success
 DAYFLOW_TOKEN_LIMIT=10
-if dayflow_execute_bounded CEN-32 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/prelaunch.jsonl" "$output"; then
+if dayflow_execute_bounded CEN-32 primary-new "$execution_worktree" fake-model medium '' "$prompt" "$TEST_TMP/prelaunch.jsonl" "$output"; then
   test_fail 'exact prelaunch token cap should fail'
 fi
 assert_eq 'token limit reached before launch (10)' "$DAYFLOW_EXECUTION_ERROR" 'prelaunch token boundary'
 assert_failure 'prelaunch rejection must not invoke Codex' test -e "$FAKE_CODEX_INVOCATION_COUNT_FILE"
 
-printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-33.json"
+printf '%s\n' '{"billable_tokens":0}' >"$DAYFLOW_STATE_ROOT/CEN-33.json"
 unset FAKE_CODEX_INVOCATION_COUNT_FILE
 export FAKE_CODEX_MODE=fast-overflow
-if dayflow_execute_bounded CEN-33 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/fast-overflow.jsonl" "$output"; then
+if dayflow_execute_bounded CEN-33 primary-new "$execution_worktree" fake-model medium '' "$prompt" "$TEST_TMP/fast-overflow.jsonl" "$output"; then
   test_fail 'successful fast exit at token cap should fail'
 fi
 assert_eq 'token limit exceeded after process exit (10)' "$DAYFLOW_EXECUTION_ERROR" 'post-wait token boundary'
 
-printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-35.json"
+printf '%s\n' '{"billable_tokens":0}' >"$DAYFLOW_STATE_ROOT/CEN-35.json"
 export FAKE_CODEX_MODE=late-usage
 DAYFLOW_TOKEN_LIMIT=1000
-if ! dayflow_execute_bounded CEN-35 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/late.jsonl" "$output"; then
+if ! dayflow_execute_bounded CEN-35 primary-new "$execution_worktree" fake-model medium '' "$prompt" "$TEST_TMP/late.jsonl" "$output"; then
   test_fail 'late final usage should remain within the test limit'
 fi
-assert_eq '220' "$(jq -r '.tokens_used' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'late final usage persisted after process exit'
+assert_eq '70' "$(jq -r '.billable_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'late billable usage persisted after process exit'
 assert_eq '150' "$(jq -r '.usage.cached_input_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'late cached usage persisted'
 assert_eq '50' "$(jq -r '.usage.uncached_input_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'late uncached usage persisted'
+assert_eq '220' "$(jq -r '.usage.raw_total_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'late raw usage persisted separately'
+assert_eq '70' "$(jq -r '.usage.billable_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'late billable usage persisted separately'
 
-printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-36.json"
+printf '%s\n' '{"billable_tokens":0}' >"$DAYFLOW_STATE_ROOT/CEN-38.json"
+export FAKE_CODEX_MODE=cached-live-under-cap
+DAYFLOW_TOKEN_LIMIT=120000
+if ! dayflow_execute_bounded CEN-38 primary-new "$execution_worktree" fake-model medium '' "$prompt" "$TEST_TMP/cached-under-cap.jsonl" "$output"; then
+  test_fail 'large cached context below the billable cap should complete'
+fi
+assert_eq '87595' "$(jq -r '.billable_tokens' "$DAYFLOW_STATE_ROOT/CEN-38.json")" 'large cached context persists billable usage only'
+assert_eq '1117483' "$(jq -r '.usage.raw_total_tokens' "$DAYFLOW_STATE_ROOT/CEN-38.json")" 'large cached context remains observable as raw usage'
+assert_eq '1029888' "$(jq -r '.usage.cached_input_tokens' "$DAYFLOW_STATE_ROOT/CEN-38.json")" 'large cached context remains separately observable'
+
+printf '%s\n' '{"billable_tokens":0}' >"$DAYFLOW_STATE_ROOT/CEN-39.json"
+export FAKE_CODEX_MODE=billable-live-over-cap
+if dayflow_execute_bounded CEN-39 primary-new "$execution_worktree" fake-model medium '' "$prompt" "$TEST_TMP/billable-live-over-cap.jsonl" "$output"; then
+  test_fail 'live billable over-cap usage should stop Codex'
+fi
+assert_eq 'token limit exceeded (120000)' "$DAYFLOW_EXECUTION_ERROR" 'live cap uses billable usage'
+assert_eq '139000' "$(jq -r '.billable_tokens' "$DAYFLOW_STATE_ROOT/CEN-39.json")" 'live over-cap persists billable usage'
+
+printf '%s\n' '{"billable_tokens":0}' >"$DAYFLOW_STATE_ROOT/CEN-41.json"
+export FAKE_CODEX_MODE=billable-post-exit-over-cap
+if dayflow_execute_bounded CEN-41 primary-new "$execution_worktree" fake-model medium '' "$prompt" "$TEST_TMP/billable-post-exit-over-cap.jsonl" "$output"; then
+  test_fail 'post-exit billable over-cap usage should fail'
+fi
+assert_eq 'token limit exceeded after process exit (120000)' "$DAYFLOW_EXECUTION_ERROR" 'post-exit cap uses billable usage'
+assert_eq '120001' "$(jq -r '.billable_tokens' "$DAYFLOW_STATE_ROOT/CEN-41.json")" 'post-exit over-cap persists billable usage'
+
+printf '%s\n' '{"billable_tokens":0}' >"$DAYFLOW_STATE_ROOT/CEN-36.json"
 oversized_prompt="$TEST_TMP/oversized-prompt"
 printf '%040d\n' 0 >"$oversized_prompt"
 DAYFLOW_PROMPT_LIMIT_BYTES=16
 export FAKE_CODEX_INVOCATION_COUNT_FILE="$TEST_TMP/prompt-limit-count"
-if dayflow_execute_bounded CEN-36 primary-new "$ROOT_DIR" fake-model medium '' "$oversized_prompt" "$TEST_TMP/prompt-limit.jsonl" "$output"; then
+if dayflow_execute_bounded CEN-36 primary-new "$execution_worktree" fake-model medium '' "$oversized_prompt" "$TEST_TMP/prompt-limit.jsonl" "$output"; then
   test_fail 'oversized prompt should fail before Codex launch'
 fi
 assert_failure 'prompt limit must not invoke Codex' test -e "$FAKE_CODEX_INVOCATION_COUNT_FILE"
 DAYFLOW_PROMPT_LIMIT_BYTES=32768
 unset FAKE_CODEX_INVOCATION_COUNT_FILE
 
-printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-37.json"
+printf '%s\n' '{"billable_tokens":0}' >"$DAYFLOW_STATE_ROOT/CEN-37.json"
 export FAKE_CODEX_MODE=output-limit
 DAYFLOW_LOG_LIMIT_BYTES=512
-if dayflow_execute_bounded CEN-37 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/output-limit.jsonl" "$output"; then
+if dayflow_execute_bounded CEN-37 primary-new "$execution_worktree" fake-model medium '' "$prompt" "$TEST_TMP/output-limit.jsonl" "$output"; then
   test_fail 'command output limit should stop Codex'
 fi
 assert_eq 'command output limit exceeded (512 bytes)' "$DAYFLOW_EXECUTION_ERROR" 'command output bound reason'
 DAYFLOW_LOG_LIMIT_BYTES=5242880
 
-printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-30.json"
+printf '%s\n' '{"billable_tokens":0}' >"$DAYFLOW_STATE_ROOT/CEN-30.json"
 export FAKE_CODEX_MODE=stall
 DAYFLOW_TOKEN_LIMIT=1000
 DAYFLOW_STALL_LIMIT_SECONDS=1
 DAYFLOW_EXECUTION_LIMIT_SECONDS=10
-if dayflow_execute_bounded CEN-30 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/stall.jsonl" "$output"; then
+if dayflow_execute_bounded CEN-30 primary-new "$execution_worktree" fake-model medium '' "$prompt" "$TEST_TMP/stall.jsonl" "$output"; then
   test_fail 'stall execution should fail'
 fi
 assert_eq 'no progress for 1s' "$DAYFLOW_EXECUTION_ERROR" 'stall limit reason'
 
-printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-31.json"
+printf '%s\n' '{"billable_tokens":0}' >"$DAYFLOW_STATE_ROOT/CEN-31.json"
 export FAKE_CODEX_MODE=execution-limit
 DAYFLOW_STALL_LIMIT_SECONDS=10
 DAYFLOW_EXECUTION_LIMIT_SECONDS=1
-if dayflow_execute_bounded CEN-31 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/execution.jsonl" "$output"; then
+if dayflow_execute_bounded CEN-31 primary-new "$execution_worktree" fake-model medium '' "$prompt" "$TEST_TMP/execution.jsonl" "$output"; then
   test_fail 'execution limit should fail'
 fi
 assert_eq 'execution limit exceeded (1s)' "$DAYFLOW_EXECUTION_ERROR" 'execution limit reason'
 
-printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-34.json"
+printf '%s\n' '{"billable_tokens":0}' >"$DAYFLOW_STATE_ROOT/CEN-34.json"
 export FAKE_CODEX_MODE=spawn-child
 export FAKE_CODEX_PARENT_PID_FILE="$TEST_TMP/codex-parent.pid"
 export FAKE_CODEX_CHILD_PID_FILE="$TEST_TMP/codex-child.pid"
@@ -314,7 +345,7 @@ DAYFLOW_EXECUTION_LIMIT_SECONDS=30
 (
   dayflow_acquire_lock CEN-34
   dayflow_install_cleanup_traps
-  dayflow_execute_bounded CEN-34 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/cleanup.jsonl" "$output"
+  dayflow_execute_bounded CEN-34 primary-new "$execution_worktree" fake-model medium '' "$prompt" "$TEST_TMP/cleanup.jsonl" "$output"
 ) &
 cleanup_runner_pid=$!
 for _ in $(seq 1 50); do

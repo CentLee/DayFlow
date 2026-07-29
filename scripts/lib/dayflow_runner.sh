@@ -836,7 +836,7 @@ dayflow_validate_pre_session_recovery() {
 dayflow_jsonl_usage() {
   local log_file="$1"
   [[ -s "$log_file" ]] || {
-    printf '%s\n' '{"input_tokens":0,"cached_input_tokens":0,"uncached_input_tokens":0,"output_tokens":0,"total_tokens":0}'
+    printf '%s\n' '{"input_tokens":0,"cached_input_tokens":0,"uncached_input_tokens":0,"output_tokens":0,"raw_total_tokens":0,"billable_tokens":0}'
     return
   }
   jq -R -s '
@@ -859,13 +859,33 @@ dayflow_jsonl_usage() {
         cached_input_tokens: ([$cached, $input] | min),
         uncached_input_tokens: ($input - ([$cached, $input] | min)),
         output_tokens: $output,
-        total_tokens: ([$reported_total, ($input + $output)] | max)
+        raw_total_tokens: ([$reported_total, ($input + $output)] | max),
+        billable_tokens: (($input - ([$cached, $input] | min)) + $output)
       }
-  ' "$log_file" 2>/dev/null || printf '%s\n' '{"input_tokens":0,"cached_input_tokens":0,"uncached_input_tokens":0,"output_tokens":0,"total_tokens":0}'
+  ' "$log_file" 2>/dev/null || printf '%s\n' '{"input_tokens":0,"cached_input_tokens":0,"uncached_input_tokens":0,"output_tokens":0,"raw_total_tokens":0,"billable_tokens":0}'
 }
 
-dayflow_jsonl_tokens() {
-  dayflow_jsonl_usage "$1" | jq -r '.total_tokens'
+dayflow_jsonl_billable_tokens() {
+  dayflow_jsonl_usage "$1" | jq -r '.billable_tokens'
+}
+
+dayflow_state_billable_tokens() {
+  local issue_key="$1"
+  local state_file
+  state_file="$(dayflow_state_file "$issue_key")"
+  [[ -f "$state_file" ]] || {
+    printf '%s\n' '0'
+    return
+  }
+  jq -er '
+    if (.billable_tokens | type) == "number" and .billable_tokens >= 0 then .billable_tokens
+    elif (.usage.billable_tokens | type) == "number" and .usage.billable_tokens >= 0 then .usage.billable_tokens
+    elif ((.usage.uncached_input_tokens | type) == "number" and .usage.uncached_input_tokens >= 0
+      and (.usage.output_tokens | type) == "number" and .usage.output_tokens >= 0) then
+      (.usage.uncached_input_tokens + .usage.output_tokens)
+    else empty
+    end
+  ' "$state_file"
 }
 
 dayflow_jsonl_session_id() {
@@ -983,8 +1003,8 @@ dayflow_execute_bounded() {
   local prompt_file="$7"
   local log_file="$8"
   local output_file="$9"
-  local started_at now last_progress last_size=0 size elapsed invocation_tokens aggregate_tokens pid rc=0 limit_reason=""
-  local prompt_size invocation_usage input_tokens cached_input_tokens uncached_input_tokens output_tokens
+  local started_at now last_progress last_size=0 size elapsed invocation_billable_tokens aggregate_billable_tokens pid rc=0 limit_reason=""
+  local prompt_size invocation_usage input_tokens cached_input_tokens uncached_input_tokens output_tokens raw_total_tokens
   local restore_job_control=false
 
   prompt_size="$(wc -c <"$prompt_file" | tr -d ' ')"
@@ -994,8 +1014,12 @@ dayflow_execute_bounded() {
     return 124
   fi
 
-  aggregate_tokens="$(dayflow_state_value "$issue_key" '.tokens_used // 0' 2>/dev/null || printf '0')"
-  if (( aggregate_tokens >= DAYFLOW_TOKEN_LIMIT )); then
+  aggregate_billable_tokens="$(dayflow_state_billable_tokens "$issue_key")" || {
+    DAYFLOW_EXECUTION_ERROR='billable token accounting is unavailable; refusing to launch'
+    export DAYFLOW_EXECUTION_ERROR
+    return 124
+  }
+  if (( aggregate_billable_tokens >= DAYFLOW_TOKEN_LIMIT )); then
     DAYFLOW_EXECUTION_ERROR="token limit reached before launch (${DAYFLOW_TOKEN_LIMIT})"
     export DAYFLOW_EXECUTION_ERROR
     return 124
@@ -1032,11 +1056,14 @@ dayflow_execute_bounded() {
       dayflow_state_update "$issue_key" --argjson at "$now" '.last_progress_epoch = $at'
     fi
     elapsed=$((now - started_at))
-    invocation_tokens="$(dayflow_jsonl_tokens "$log_file")"
-    aggregate_tokens="$(dayflow_state_value "$issue_key" '.tokens_used // 0' 2>/dev/null || printf '0')"
+    invocation_billable_tokens="$(dayflow_jsonl_billable_tokens "$log_file")"
+    aggregate_billable_tokens="$(dayflow_state_billable_tokens "$issue_key")" || {
+      limit_reason='billable token accounting became unavailable'
+      break
+    }
     if (( size >= DAYFLOW_LOG_LIMIT_BYTES )); then
       limit_reason="command output limit exceeded (${DAYFLOW_LOG_LIMIT_BYTES} bytes)"
-    elif (( aggregate_tokens + invocation_tokens >= DAYFLOW_TOKEN_LIMIT )); then
+    elif (( aggregate_billable_tokens + invocation_billable_tokens >= DAYFLOW_TOKEN_LIMIT )); then
       limit_reason="token limit exceeded (${DAYFLOW_TOKEN_LIMIT})"
     elif (( now - last_progress >= DAYFLOW_STALL_LIMIT_SECONDS )); then
       limit_reason="no progress for ${DAYFLOW_STALL_LIMIT_SECONDS}s"
@@ -1059,30 +1086,40 @@ dayflow_execute_bounded() {
   fi
 
   invocation_usage="$(dayflow_jsonl_usage "$log_file")"
-  invocation_tokens="$(jq -r '.total_tokens' <<<"$invocation_usage")"
+  invocation_billable_tokens="$(jq -r '.billable_tokens' <<<"$invocation_usage")"
   input_tokens="$(jq -r '.input_tokens' <<<"$invocation_usage")"
   cached_input_tokens="$(jq -r '.cached_input_tokens' <<<"$invocation_usage")"
   uncached_input_tokens="$(jq -r '.uncached_input_tokens' <<<"$invocation_usage")"
   output_tokens="$(jq -r '.output_tokens' <<<"$invocation_usage")"
-  aggregate_tokens="$(dayflow_state_value "$issue_key" '.tokens_used // 0' 2>/dev/null || printf '0')"
-  aggregate_tokens=$((aggregate_tokens + invocation_tokens))
+  raw_total_tokens="$(jq -r '.raw_total_tokens' <<<"$invocation_usage")"
+  aggregate_billable_tokens="$(dayflow_state_billable_tokens "$issue_key")" || {
+    DAYFLOW_EXECUTION_ERROR='billable token accounting is unavailable after process exit'
+    export DAYFLOW_EXECUTION_ERROR
+    return 124
+  }
+  aggregate_billable_tokens=$((aggregate_billable_tokens + invocation_billable_tokens))
   dayflow_state_update "$issue_key" \
-    --argjson tokens "$aggregate_tokens" \
+    --argjson billable "$aggregate_billable_tokens" \
+    --argjson invocation_billable "$invocation_billable_tokens" \
     --argjson input "$input_tokens" \
     --argjson cached "$cached_input_tokens" \
     --argjson uncached "$uncached_input_tokens" \
     --argjson output "$output_tokens" \
+    --argjson raw_total "$raw_total_tokens" \
     --arg at "$(dayflow_now_iso)" \
-    '.tokens_used = $tokens
-     | .usage = ((.usage // {input_tokens: 0, cached_input_tokens: 0, uncached_input_tokens: 0, output_tokens: 0, invocations: 0})
+    '.billable_tokens = $billable
+     | .usage = ((.usage // {input_tokens: 0, cached_input_tokens: 0, uncached_input_tokens: 0, output_tokens: 0, raw_total_tokens: 0, billable_tokens: 0, invocations: 0})
        | .input_tokens += $input
        | .cached_input_tokens += $cached
        | .uncached_input_tokens += $uncached
        | .output_tokens += $output
+       | .raw_total_tokens += $raw_total
+       | .billable_tokens += $invocation_billable
        | .invocations += 1)
+     | del(.tokens_used)
      | .updated_at = $at'
 
-  if [[ -z "$limit_reason" && "$rc" == "0" ]] && (( aggregate_tokens >= DAYFLOW_TOKEN_LIMIT )); then
+  if [[ -z "$limit_reason" && "$rc" == "0" ]] && (( aggregate_billable_tokens >= DAYFLOW_TOKEN_LIMIT )); then
     limit_reason="token limit exceeded after process exit (${DAYFLOW_TOKEN_LIMIT})"
     rc=124
   fi
@@ -1206,6 +1243,99 @@ dayflow_is_publication_recovery() {
   [[ "$(jq -r '.status // ""' "$state_file")" == "publication-retry" ]]
 }
 
+dayflow_is_token_accounting_recovery() {
+  local issue_key="$1"
+  local state_file
+  state_file="$(dayflow_state_file "$issue_key")"
+  [[ -f "$state_file" ]] || return 1
+  [[ "$(jq -r '.status // ""' "$state_file")" == "token-accounting-recovery" ]]
+}
+
+dayflow_reconcile_token_accounting() {
+  local issue_key="$1"
+  local state_file status last_error billable log_file output_file session_id evidence worktree branch persisted_branch usage raw_total
+  local -a primary_logs=()
+
+  state_file="$(dayflow_state_file "$issue_key")"
+  [[ -f "$state_file" ]] || return 1
+  status="$(jq -r '.status // ""' "$state_file")"
+  last_error="$(jq -r '.last_error // ""' "$state_file")"
+  [[ "$status" == "blocked" && "$last_error" == token\ limit\ exceeded* ]] || return 1
+  while IFS= read -r log_file; do
+    output_file="${log_file%.jsonl}.out"
+    [[ -f "$output_file" ]] && primary_logs+=("$log_file")
+  done < <(find "$DAYFLOW_LOG_ROOT" -maxdepth 1 -type f -name "${issue_key}-*-primary.jsonl" -print 2>/dev/null | sort)
+  [[ "${#primary_logs[@]}" == "1" ]] || {
+    dayflow_error "$issue_key token recovery requires exactly one retained primary log and output"
+    return 2
+  }
+  log_file="${primary_logs[0]}"
+  output_file="${log_file%.jsonl}.out"
+  session_id="$(dayflow_jsonl_session_id "$log_file")"
+  [[ -n "$session_id" ]] || {
+    dayflow_error "$issue_key token recovery requires the retained primary session id"
+    return 2
+  }
+  evidence="$(dayflow_validate_test_evidence "$output_file")" || {
+    dayflow_error "$issue_key token recovery primary output lacks valid passed test evidence"
+    return 2
+  }
+  worktree="$(jq -r '.worktree // ""' "$state_file")"
+  persisted_branch="$(jq -r '.branch // ""' "$state_file")"
+  [[ "$worktree" == "$DAYFLOW_WORKTREE_ROOT/$issue_key" && -e "$worktree/.git" && -n "$persisted_branch" ]] || {
+    dayflow_error "$issue_key token recovery worktree is not owned by this issue"
+    return 2
+  }
+  branch="$(git -C "$worktree" branch --show-current)"
+  [[ "$branch" == "$persisted_branch" ]] || {
+    dayflow_error "$issue_key token recovery branch does not match persisted ownership"
+    return 2
+  }
+  usage="$(dayflow_jsonl_usage "$log_file")"
+  billable="$(jq -r '.billable_tokens' <<<"$usage")"
+  raw_total="$(jq -r '.raw_total_tokens' <<<"$usage")"
+  (( billable < DAYFLOW_TOKEN_LIMIT )) || return 1
+  jq -e --argjson retained "$usage" '
+    (.primary_agent | type) == "string" and (.primary_agent | length) > 0
+    and (.model | type) == "string" and (.model | length) > 0
+    and (.reasoning | type) == "string" and (.reasoning | length) > 0
+    and (.base_branch | type) == "string" and (.base_branch | length) > 0
+    and (.usage.input_tokens | type) == "number" and .usage.input_tokens >= 0
+    and (.usage.cached_input_tokens | type) == "number" and .usage.cached_input_tokens >= 0
+    and (.usage.uncached_input_tokens | type) == "number" and .usage.uncached_input_tokens >= 0
+    and (.usage.output_tokens | type) == "number" and .usage.output_tokens >= 0
+    and (.usage.cached_input_tokens <= .usage.input_tokens)
+    and (.usage.uncached_input_tokens == (.usage.input_tokens - .usage.cached_input_tokens))
+    and (.usage.input_tokens == $retained.input_tokens)
+    and (.usage.cached_input_tokens == $retained.cached_input_tokens)
+    and (.usage.uncached_input_tokens == $retained.uncached_input_tokens)
+    and (.usage.output_tokens == $retained.output_tokens)
+    and (if (.billable_tokens | type) == "number" then .billable_tokens == $retained.billable_tokens else true end)
+    and (if (.usage.billable_tokens | type) == "number" then .usage.billable_tokens == $retained.billable_tokens else true end)
+  ' "$state_file" >/dev/null || {
+    dayflow_error "$issue_key token recovery usage does not match the retained primary log"
+    return 2
+  }
+  dayflow_allowed_base_branch "$(jq -r '.base_branch' "$state_file")" || return 2
+  dayflow_state_update "$issue_key" \
+    --arg session "$session_id" \
+    --argjson evidence "$evidence" \
+    --argjson billable "$billable" \
+    --argjson raw_total "$raw_total" \
+    --arg at "$(dayflow_now_iso)" \
+    '.billable_tokens = $billable
+     | .usage.raw_total_tokens = $raw_total
+     | .usage.billable_tokens = $billable
+     | .session_id = $session
+     | .test_evidence = $evidence
+     | .publication = {phase: "edited", review_context: "Recovered retained primary output after cached-context token accounting correction."}
+     | .status = "token-accounting-recovery"
+     | .last_error = "Recovered false token-limit block; retained primary output is ready for deterministic publication."
+     | .token_accounting_reconciled_at = $at
+     | del(.tokens_used)'
+  return 0
+}
+
 dayflow_mark_publication_retry() {
   local issue_key="$1"
   local reason="$2"
@@ -1236,7 +1366,16 @@ dayflow_mark_running() {
     --arg issue "$issue_key" --arg id "$issue_id" --arg title "$title" --arg agent "$primary" \
     --arg model "$model" --arg reasoning "$reasoning" --arg branch "$branch" --arg worktree "$worktree" --arg base "$base_branch" \
     --arg at "$(dayflow_now_iso)" \
-    '. + {issue: $issue, issue_id: $id, title: $title, primary_agent: $agent, model: $model, reasoning: $reasoning, branch: $branch, base_branch: $base, worktree: $worktree, status: "running", updated_at: $at, tokens_used: (.tokens_used // 0)}'
+    '. + {issue: $issue, issue_id: $id, title: $title, primary_agent: $agent, model: $model, reasoning: $reasoning, branch: $branch, base_branch: $base, worktree: $worktree, status: "running", updated_at: $at}
+     | .billable_tokens = (
+         if (.billable_tokens | type) == "number" and .billable_tokens >= 0 then .billable_tokens
+         elif (.usage.billable_tokens | type) == "number" and .usage.billable_tokens >= 0 then .usage.billable_tokens
+         elif ((.usage.uncached_input_tokens | type) == "number" and .usage.uncached_input_tokens >= 0
+           and (.usage.output_tokens | type) == "number" and .usage.output_tokens >= 0) then
+           (.usage.uncached_input_tokens + .usage.output_tokens)
+         else 0
+         end)
+     | del(.tokens_used)'
 }
 
 dayflow_mark_publication_unsafe() {
@@ -1665,7 +1804,7 @@ dayflow_run_issue() {
   local issue_json issue_id title description linear_state primary model_route model reasoning branch base_branch worktree session_id mode
   local timestamp prompt_file log_file output_file pr_json pr_number review_prompt review_log review_output
   local review_round=1 findings_comment remediation_prompt remediation_log remediation_output repo
-  local pre_session_recovery=false publication_recovery=false requested_changes_recovery=false recovery_status=""
+  local pre_session_recovery=false publication_recovery=false requested_changes_recovery=false token_accounting_recovery=false recovery_status=""
 
   dayflow_validate_issue_key "$issue_key" || {
     dayflow_error "invalid issue key: $issue_key"
@@ -1691,17 +1830,22 @@ dayflow_run_issue() {
   if dayflow_is_publication_recovery "$issue_key"; then
     publication_recovery=true
   fi
+  if dayflow_is_token_accounting_recovery "$issue_key"; then
+    token_accounting_recovery=true
+  fi
   if [[ -f "$(dayflow_state_file "$issue_key")" && "$(dayflow_state_value "$issue_key" '.status // ""')" == "review-changes" ]]; then
     requested_changes_recovery=true
   fi
   if [[ "$publication_recovery" == "true" ]]; then
     recovery_status="publication-retry"
+  elif [[ "$token_accounting_recovery" == "true" ]]; then
+    recovery_status="token-accounting-recovery"
   elif [[ "$requested_changes_recovery" == "true" ]]; then
     recovery_status="review-changes"
   fi
 
   if [[ "$DAYFLOW_DRY_RUN" == "true" ]]; then
-    if [[ "$publication_recovery" == "true" || "$requested_changes_recovery" == "true" ]]; then
+    if [[ "$publication_recovery" == "true" || "$requested_changes_recovery" == "true" || "$token_accounting_recovery" == "true" ]]; then
       dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" true "$base_branch" >/dev/null || return 1
     elif [[ "$pre_session_recovery" == "true" ]]; then
       case "$linear_state" in
@@ -1732,6 +1876,14 @@ dayflow_run_issue() {
     case "$linear_state" in
       "$DAYFLOW_STATE_TODO_NAME"|"$DAYFLOW_STATE_BLOCKED_NAME"|"$DAYFLOW_STATE_IN_PROGRESS_NAME"|"$DAYFLOW_STATE_IN_REVIEW_NAME") ;;
       *) dayflow_error "publication recovery is not runnable from issue state: $linear_state"; return 1 ;;
+    esac
+    worktree="$(dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" true "$base_branch")" || return 1
+    session_id="$(dayflow_state_value "$issue_key" '.session_id')"
+    mode="primary-resume"
+  elif [[ "$token_accounting_recovery" == "true" ]]; then
+    case "$linear_state" in
+      "$DAYFLOW_STATE_BLOCKED_NAME"|"$DAYFLOW_STATE_IN_PROGRESS_NAME") ;;
+      *) dayflow_error "token-accounting recovery is not runnable from issue state: $linear_state"; return 1 ;;
     esac
     worktree="$(dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" true "$base_branch")" || return 1
     session_id="$(dayflow_state_value "$issue_key" '.session_id')"
@@ -1799,7 +1951,7 @@ dayflow_run_issue() {
   if [[ -n "$recovery_status" ]]; then
     dayflow_mark_running "$issue_key" "$issue_id" "$title" "$primary" "$model" "$reasoning" "$branch" "$worktree" "$base_branch"
   fi
-  if [[ "$publication_recovery" != "true" ]]; then
+  if [[ "$publication_recovery" != "true" && "$token_accounting_recovery" != "true" ]]; then
     dayflow_notify_state "$issue_key" "$DAYFLOW_STATE_IN_PROGRESS_NAME" "Primary agent ${primary} started with ${model}/${reasoning}."
   fi
 
@@ -1807,7 +1959,7 @@ dayflow_run_issue() {
   prompt_file="$DAYFLOW_LOG_ROOT/${issue_key}-${timestamp}-primary.prompt"
   log_file="$DAYFLOW_LOG_ROOT/${issue_key}-${timestamp}-primary.jsonl"
   output_file="$DAYFLOW_LOG_ROOT/${issue_key}-${timestamp}-primary.out"
-  if [[ "$publication_recovery" != "true" ]]; then
+  if [[ "$publication_recovery" != "true" && "$token_accounting_recovery" != "true" ]]; then
     if [[ "$requested_changes_recovery" == "true" ]]; then
       {
         printf 'Address only the current GitHub requested changes below in the existing session. Make a concrete issue-scoped worktree change, run focused tests, and return the required structured test-evidence JSON. Do not stage, commit, push, use gh, or change lifecycle state.\n\n'
@@ -1959,12 +2111,21 @@ dayflow_status_issue() {
 
 dayflow_reconcile() {
   local issue_key="${1:-}"
-  local state_file target rc=0
+  local state_file target rc=0 recovery_rc
   dayflow_install_cleanup_traps
   if [[ -n "$issue_key" ]]; then
     dayflow_validate_issue_key "$issue_key" || return 2
     dayflow_acquire_lock "$issue_key" || return 1
-    if dayflow_reconcile_one "$issue_key"; then rc=0; else rc=$?; fi
+    if dayflow_reconcile_token_accounting "$issue_key"; then
+      rc=0
+    else
+      recovery_rc=$?
+      if [[ "$recovery_rc" == "1" ]]; then
+        if dayflow_reconcile_one "$issue_key"; then rc=0; else rc=$?; fi
+      else
+        rc="$recovery_rc"
+      fi
+    fi
     dayflow_release_lock
     return "$rc"
   fi
@@ -1975,7 +2136,16 @@ dayflow_reconcile() {
       rc=1
       continue
     fi
-    if ! dayflow_reconcile_one "$target"; then rc=1; fi
+    if dayflow_reconcile_token_accounting "$target"; then
+      :
+    else
+      recovery_rc=$?
+      if [[ "$recovery_rc" == "1" ]]; then
+        if ! dayflow_reconcile_one "$target"; then rc=1; fi
+      else
+        rc=1
+      fi
+    fi
     dayflow_release_lock
   done
   return "$rc"

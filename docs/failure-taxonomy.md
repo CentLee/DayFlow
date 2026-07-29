@@ -18,7 +18,7 @@ The configured model is unavailable, rejected, or inaccessible. No fallback is a
 
 ### F4. Resource Limit
 
-Aggregate tokens exceed 120K, output makes no progress for five minutes, or an invocation reaches 20 minutes. The Codex child is terminated and the issue is blocked with local evidence.
+Aggregate billable tokens (uncached input plus output) reach 120K, output makes no progress for five minutes, or an invocation reaches 20 minutes. Cached input remains observable but does not consume the cap. The Codex child is terminated and the issue is blocked with local evidence. A historical cached-context false block may be reconciled only from consistent persisted usage plus one retained primary log/output pair and valid evidence; that path preserves the owned worktree and never replays the primary model.
 
 ### F5. Delivery Failure
 

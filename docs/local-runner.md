@@ -42,7 +42,7 @@ Selection is deterministic: Linear priority ascending, with unset priority last,
 
 The cycle has a singleton PID lock, and every dispatch has a PID-backed claim under `.dayflow/supervisor/claims`. A live lock rejects an overlapping cycle; a dead lock is recovered. On restart, dead claims are removed only when runner state is safely terminal or resumable through normal lifecycle handling. Missing or unsafe runner state preserves the claim and fails closed. The runner's per-issue ownership and lock checks remain authoritative.
 
-Owned `review-changes` and `publication-retry` work is eligible ahead of new `Todo` work only when local issue, session, worktree, branch, dependency, claim, and write-scope guards all pass. Unrelated Linear `In Progress` or `In Review` issues are never adopted. PID locks and claims include process start identity so PID reuse is not mistaken for live ownership.
+Owned `review-changes`, `publication-retry`, and `token-accounting-recovery` work is eligible ahead of new `Todo` work only when local issue, session, worktree, branch, dependency, claim, and write-scope guards all pass. Unrelated Linear `In Progress` or `In Review` issues are never adopted. PID locks and claims include process start identity so PID reuse is not mistaken for live ownership.
 
 ## Admission and Ownership
 
@@ -68,7 +68,7 @@ Primary execution uses `workspace-write` and approval policy `never`. Review use
 
 ## Bounds and Review
 
-The supervisor adds no model invocation or token pool. Every dispatched issue inherits the runner's resource boundaries, including its 120,000 aggregate token ceiling, prompt and output caps, 20-minute invocation limit, and five-minute no-progress limit. A limit breach preserves the worktree and blocks the issue.
+The supervisor adds no model invocation or token pool. Every dispatched issue inherits the runner's resource boundaries, including its 120,000 aggregate **billable** token ceiling, prompt and output caps, 20-minute invocation limit, and five-minute no-progress limit. Billable tokens are uncached input plus output; cached input remains separately persisted as raw observability and never consumes `DAYFLOW_TOKEN_LIMIT`. Admission, live monitoring, persisted aggregate accounting, and post-exit checks use that same billable value. A limit breach preserves the worktree and blocks the issue.
 
 The Primary Agent must leave a pushed branch, at least one commit beyond `origin/<declared-base>`, an open PR targeting that base, and non-empty proof sections. The runner then invokes `review-agent` with `gpt-5.6-terra/high`. P0-P2 findings are posted to the PR and returned once to the same Primary Agent session. A second blocking review result blocks the issue.
 
@@ -104,5 +104,6 @@ The hosted job never deletes local `.dayflow` state or worktrees. Supervisor `on
 
 - Admission failure: fix the Linear metadata, return the issue to `Todo`, and rerun.
 - Model, token, timeout, or delivery failure: inspect `status` and `.dayflow/logs`, retain the worktree, resolve the cause, then deliberately return the issue to a runnable state.
+- Cached-context false block: when a blocked state has retained, internally consistent raw usage, exactly one primary log/output pair, valid passed evidence, and matching owned worktree metadata, run `reconcile CEN-N` and then `run CEN-N`. Reconciliation recomputes billable tokens and stages deterministic publication/review from that retained primary output; it does not launch a second primary model. Any missing or inconsistent evidence remains blocked for operator review.
 - Requested changes: run `reconcile`, then `run CEN-N`; the same Primary Agent session resumes.
 - Failed merged-PR workflow: rerun the failed GitHub Actions job; use local `reconcile CEN-N` only as a deliberate fallback.

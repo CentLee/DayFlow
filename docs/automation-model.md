@@ -45,7 +45,7 @@ An issue is queue-eligible only when it is `Todo` and every blocker is `Done`. E
 
 A claim records the issue, PID, parallel marker, scopes, and start time while the runner owns the dispatch. Live claims consume capacity. Dead claims are released only when persisted runner state is one of the known safe lifecycle outcomes; unsafe or missing state preserves the claim and stops the cycle. The supervisor never bypasses runner admission, ownership, per-issue locking, review, or resource limits.
 
-Locally owned `review-changes` and `publication-retry` states sort before new `Todo` work. They must retain a clean exact worktree, matching branch, session/model ownership, completed blockers, no existing claim, and valid write-scope metadata. Locks and claims compare both PID and process start identity.
+Locally owned `review-changes`, `publication-retry`, and `token-accounting-recovery` states sort before new `Todo` work. They must retain a clean exact worktree, matching branch, session/model ownership, completed blockers, no existing claim, and valid write-scope metadata. Locks and claims compare both PID and process start identity.
 
 ## Admission and Delivery Contract
 
@@ -73,7 +73,7 @@ Codex subprocesses receive no Linear, GitHub, or Discord credential variables. P
 
 `product-agent`, `integration-agent`, and `review-agent` use `gpt-5.6-terra/high`. `backend-agent` and `ios-agent` use `gpt-5.6-terra/medium`. There is no fallback.
 
-The default execution sandbox is `workspace-write`, approval policy is `never`, and review is read-only. The aggregate issue token limit is 120K; prompt, command-output, no-progress, and wall-clock bounds are enforced by the runner. Supervisor dispatch inherits these per-issue limits and does not create a separate token budget. Breaches terminate the child process, preserve state, and block the issue.
+The default execution sandbox is `workspace-write`, approval policy is `never`, and review is read-only. The aggregate issue token limit is 120K **billable tokens**: uncached input plus output. Cached input does not consume the cap, but raw input, cached input, uncached input, output, raw totals, and billable totals remain persisted for diagnostics. Admission, live monitoring, persistence, and post-exit guards all use billable totals. Prompt, command-output, no-progress, and wall-clock bounds are enforced by the runner. Supervisor dispatch inherits these per-issue limits and does not create a separate token budget. Breaches terminate the child process, preserve state, and block the issue.
 
 ## Reconciliation
 
@@ -84,6 +84,8 @@ The default execution sandbox is `workspace-write`, approval policy is `never`, 
 - merged PR: local `Done` convergence; the hosted claim-marked lifecycle sends the sole completion notification
 
 Runner `status` is read-only. Runner `reconcile [CEN-N]` handles one issue and runner `reconcile` handles all locally owned issues. Supervisor `reconcile` combines claim recovery with that all-issue reconciliation; supervisor `cleanup` performs only guarded local cleanup. `start` atomically captures `LINEAR_API_KEY` and effective `PATH` in canonical `.dayflow/supervisor.env` before loading the per-user `launchd` job; `stop` unloads it, and supervisor `status` reports scheduling, snapshot, and claims without exposing the environment or dispatching work.
+
+For an historical cached-context false block, `reconcile CEN-N` may correct local accounting only when it can prove billable usage from persisted raw fields, find exactly one matching retained primary log/output pair, validate passed evidence, and revalidate owned worktree metadata. It changes local state to deterministic publication recovery without a primary model call; a subsequent `run CEN-N` publishes and reviews that retained work. Ambiguous or incomplete state remains blocked.
 
 ### Merged PR event closure
 

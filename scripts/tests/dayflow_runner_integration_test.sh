@@ -558,6 +558,78 @@ run_owned_recovery_gate_case() {
   rm -rf "$test_root"
 }
 
+run_false_token_block_recovery_test() {
+  local test_root seed worktree branch state_file log_file output_file
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  jq '.state = {id: "state-in-progress", name: "In Progress"}' \
+    "$DAYFLOW_ISSUE_FIXTURE_FILE" >"$test_root/retained-output-recovery-issue.json"
+  export DAYFLOW_ISSUE_FIXTURE_FILE="$test_root/retained-output-recovery-issue.json"
+  dayflow_prepare_notification_fixture
+  export FAKE_CODEX_MODE=success FAKE_REVIEW_MODE=clean
+  branch='feature/tasks-29-replace-symphony-with-dayflow-local-runner'
+  mkdir -p "$DAYFLOW_WORKTREE_ROOT" "$DAYFLOW_STATE_ROOT" "$DAYFLOW_LOG_ROOT"
+  worktree="$DAYFLOW_WORKTREE_ROOT/CEN-29"
+  git -C "$seed" worktree add -b "$branch" "$worktree" origin/develop >/dev/null
+  printf '%s\n' 'recovered primary edit' >"$worktree/runner-result.txt"
+  log_file="$DAYFLOW_LOG_ROOT/CEN-29-20260728T000000Z-primary.jsonl"
+  output_file="${log_file%.jsonl}.out"
+  printf '%s\n' \
+    '{"type":"thread.started","thread_id":"retained-cen-35-primary-session"}' \
+    '{"type":"turn.completed","usage":{"input_tokens":1106724,"cached_input_tokens":1029888,"output_tokens":10759}}' \
+    >"$log_file"
+  printf '%s\n' '{"summary":"retained primary output","tests":[{"name":"focused retained test","status":"passed"}]}' >"$output_file"
+  state_file="$DAYFLOW_STATE_ROOT/CEN-29.json"
+  jq -n --arg worktree "$worktree" --arg branch "$branch" '
+    {
+      issue: "CEN-29",
+      issue_id: "issue-29",
+      title: "[Integration] Replace Symphony with DayFlow local runner",
+      primary_agent: "integration-agent",
+      model: "gpt-5.6-terra",
+      reasoning: "high",
+      branch: $branch,
+      base_branch: "develop",
+      worktree: $worktree,
+      status: "blocked",
+      last_error: "token limit exceeded after process exit (120000)",
+      tokens_used: 1117483,
+      usage: {
+        input_tokens: 1106724,
+        cached_input_tokens: 1029888,
+        uncached_input_tokens: 76835,
+        output_tokens: 10759,
+        invocations: 1
+      }
+    }
+  ' >"$state_file"
+  export FAKE_CODEX_PRIMARY_COUNT_FILE="$test_root/primary-count"
+
+  assert_failure 'mismatched retained usage remains blocked' "$SOURCE_ROOT/scripts/dayflow_runner.sh" reconcile CEN-29
+  assert_eq 'blocked' "$(jq -r '.status' "$state_file")" 'mismatched retained usage preserves the block'
+  jq '.usage.uncached_input_tokens = 76836' "$state_file" >"$state_file.tmp"
+  mv "$state_file.tmp" "$state_file"
+
+  printf '%s\n' '{"summary":"invalid retained output","tests":[{"name":"focused retained test","status":"failed"}]}' >"$output_file"
+  assert_failure 'invalid retained evidence remains blocked' "$SOURCE_ROOT/scripts/dayflow_runner.sh" reconcile CEN-29
+  assert_eq 'blocked' "$(jq -r '.status' "$state_file")" 'invalid retained evidence preserves the block'
+  printf '%s\n' '{"summary":"retained primary output","tests":[{"name":"focused retained test","status":"passed"}]}' >"$output_file"
+
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" reconcile CEN-29 >/dev/null
+  assert_eq 'token-accounting-recovery' "$(jq -r '.status' "$state_file")" 'false cached-context block becomes deterministic recovery'
+  assert_eq '87595' "$(jq -r '.billable_tokens' "$state_file")" 'recovery recalculates CEN-35 billable usage'
+  assert_eq '1117483' "$(jq -r '.usage.raw_total_tokens' "$state_file")" 'recovery preserves raw token observability'
+  assert_eq 'retained-cen-35-primary-session' "$(jq -r '.session_id' "$state_file")" 'recovery retains primary session identity'
+  assert_failure 'reconciliation never replays the primary model' test -e "$FAKE_CODEX_PRIMARY_COUNT_FILE"
+
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
+  assert_failure 'deterministic publication never replays the primary model' test -e "$FAKE_CODEX_PRIMARY_COUNT_FILE"
+  assert_eq '1' "$(git -C "$worktree" rev-list --count origin/develop..HEAD)" 'recovery publishes retained primary worktree changes'
+  assert_eq 'merge-ready' "$(jq -r '.status' "$state_file")" 'recovery completes publication and review without a second primary'
+  rm -rf "$test_root"
+}
+
 if [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "locks" ]]; then
   run_webhook_retry_and_lock_test
 elif [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "temporary-base" ]]; then
@@ -581,6 +653,7 @@ else
   run_owned_recovery_gate_case publication-retry linear
   run_owned_recovery_gate_case review-changes preflight
   run_owned_recovery_gate_case review-changes linear
+  run_false_token_block_recovery_test
   run_review_remediation_test
   run_publication_preflight_failure_test
   run_model_rejection_test

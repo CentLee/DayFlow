@@ -12,6 +12,10 @@ artifact for any issue in this queue.
 
 The temporary branch `integration/private-two-person-cutover` is scoped to the CEN-34 through CEN-43 cutover. Delivery issues targeting it must declare `Integration Base: integration/private-two-person-cutover` in Linear; absent metadata continues to use `develop`, while any other or malformed value is rejected. CEN-42 is the full E2E gate on that branch. CEN-43 is the final review and cutover PR whose head is that integration branch and whose base is `develop`; it is deliberately not a `feature/tasks-*` delivery and must not be treated as task completion.
 
+## CEN-36 Emergency Ordering
+
+CEN-35's retained implementation was falsely blocked when cached input was counted against the runner cap. CEN-36 is therefore an emergency harness repair and must complete before CEN-35 is resumed. The earlier private Tailscale/iMac deployment text that occupied CEN-36 is stale: it is deferred for a separately numbered, dependency-reviewed issue after CEN-35 resumes. This queue does not silently rename or expand that deployment scope. Any entries below that named the former CEN-36 dependency now name the deferred private-deployment prerequisite rather than a completed CEN-36.
+
 ## Legacy CEN-24--CEN-27 Disposition
 
 | Legacy issue | Disposition | Replacement mapping |
@@ -75,31 +79,33 @@ The temporary branch `integration/private-two-person-cutover` is scoped to the C
   - `services/api/**/*_test.go`
 - Dependencies: CEN-34
 
-### CEN-36 — [Integration] private Tailscale/iMac deployment
+### CEN-36 — [Integration] cached-context billable token accounting repair
 
 - Primary Agent: `integration-agent`
 - Integration Base: `integration/private-two-person-cutover`
 - Inputs:
-  - `docs/product-spec.md`
-  - `docs/api-contract.md`
   - `docs/local-runner.md`
-  - completed CEN-35 topology migration
+  - `docs/automation-model.md`
+  - `scripts/lib/dayflow_runner.sh`
+  - CEN-35 false-block state and retained primary logs
 - Done When:
-  - iMac Docker Compose service lifecycle, including durable restart policy, is configured and verified
-  - the API is configured on the iMac's Tailscale MagicDNS name and is not publicly exposed
-  - deployment verification confirms no router port forwarding, public DNS, reverse proxy, tunnel, or other public ingress is required or enabled
-  - an iPhone connected to the tailnet verifies the private API path to the iMac
-  - backup, restore, and health checks are exercised, and an operator runbook records deployment, recovery, and verification steps
+  - `DAYFLOW_TOKEN_LIMIT` consistently applies only uncached input plus output at admission, live-monitor, persistence, and post-exit boundaries
+  - cached input and raw totals remain persisted independently for diagnostics
+  - focused tests cover a large cached under-cap invocation, truly billable live/post-exit over-cap behavior, and deterministic CEN-35-style recovery without primary replay
+  - local runner and automation documentation describe the billable definition and safe retained-output reconciliation
 - Out of Scope:
-  - Google identity exchange implementation
-  - iOS authentication UI or offline client behavior
+  - private deployment implementation or external machine changes
+  - model policy, token-limit value, or product behavior
 - Execution Mode: Sequential
 - Parallel Safe: no
 - Write Scope:
-  - `deploy/**`
-  - `docs/operator-runbook.md`
-  - deployment verification evidence only
-- Dependencies: CEN-35
+  - `scripts/lib/dayflow_runner.sh`
+  - `scripts/tests/**`
+  - `docs/local-runner.md`
+  - `docs/automation-model.md`
+  - `docs/failure-taxonomy.md`
+  - `docs/iteration-queue.md`
+- Dependencies: CEN-34
 
 ### CEN-37 — [Backend] Google ID-token exchange and legacy auth retirement
 
@@ -108,7 +114,7 @@ The temporary branch `integration/private-two-person-cutover` is scoped to the C
 - Inputs:
   - `docs/api-contract.md`
   - `docs/domain-model.md`
-  - completed CEN-35 topology migration and CEN-36 private deployment
+  - completed CEN-35 topology migration and deferred private-deployment prerequisite
 - Done When:
   - `POST /v1/auth/google/exchange` validates issuer, audience, signature, expiry, verified email, subject, and email guard
   - only the two configured subjects receive revocable opaque DayFlow sessions
@@ -122,7 +128,7 @@ The temporary branch `integration/private-two-person-cutover` is scoped to the C
 - Parallel Safe: no
 - Write Scope:
   - `services/api/**`
-- Dependencies: CEN-35, CEN-36
+- Dependencies: CEN-35, deferred private-deployment prerequisite
 
 ### CEN-38 — [Backend] fixed calendar and owner-budget boundary
 
@@ -179,7 +185,7 @@ The temporary branch `integration/private-two-person-cutover` is scoped to the C
 - Inputs:
   - `docs/ios-architecture.md`
   - `docs/api-contract.md`
-  - completed CEN-36 private deployment and CEN-37 authentication behavior
+  - completed deferred private-deployment prerequisite and CEN-37 authentication behavior
 - Done When:
   - app exchanges Google ID tokens only with the configured Tailscale MagicDNS API endpoint
   - owner and partner bootstrap render their correct tab sets and calendar scopes
@@ -194,7 +200,7 @@ The temporary branch `integration/private-two-person-cutover` is scoped to the C
 - Write Scope:
   - `apps/ios/DayFlow/**`
   - `apps/ios/DayFlowTests/**`
-- Dependencies: CEN-36, CEN-37
+- Dependencies: deferred private-deployment prerequisite, CEN-37
 
 ### CEN-41 — [iOS] offline cache/explicit transfer
 
@@ -225,7 +231,7 @@ The temporary branch `integration/private-two-person-cutover` is scoped to the C
 - Primary Agent: `integration-agent`
 - Integration Base: `integration/private-two-person-cutover`
 - Inputs:
-  - completed CEN-35 through CEN-41 work
+  - completed CEN-35 through CEN-41 work and the deferred private-deployment prerequisite
   - `docs/product-spec.md`
   - `docs/review-checklist.md`
   - `docs/operator-runbook.md`
@@ -244,7 +250,7 @@ The temporary branch `integration/private-two-person-cutover` is scoped to the C
   - integration test harnesses and fixtures
   - deployment verification evidence
   - `docs/operator-runbook.md`
-- Dependencies: CEN-35, CEN-36, CEN-37, CEN-38, CEN-39, CEN-40, CEN-41
+- Dependencies: CEN-35, CEN-36, deferred private-deployment prerequisite, CEN-37, CEN-38, CEN-39, CEN-40, CEN-41
 
 ### CEN-43 — [Review] cutover
 

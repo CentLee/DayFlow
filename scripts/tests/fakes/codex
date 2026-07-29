@@ -84,7 +84,7 @@ case "${FAKE_CODEX_MODE:-success}" in
     done
     ;;
   fast-overflow)
-    printf '%s\n' '{"type":"response.completed","response":{"usage":{"total_tokens":10}}}'
+    printf '%s\n' '{"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":1}}}'
     exit 0
     ;;
   late-usage)
@@ -92,6 +92,22 @@ case "${FAKE_CODEX_MODE:-success}" in
     printf '%s\n' '{"type":"turn.progress","usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10}}'
     printf '%s\n' '{"type":"turn.progress","usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10}}'
     printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":200,"cached_input_tokens":150,"output_tokens":20}}'
+    exit 0
+    ;;
+  cached-live-under-cap)
+    printf '%s\n' '{"type":"thread.started","thread_id":"fake-cached-session"}'
+    printf '%s\n' '{"type":"turn.progress","usage":{"input_tokens":1106724,"cached_input_tokens":1029888,"output_tokens":10759}}'
+    sleep 1
+    printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1106724,"cached_input_tokens":1029888,"output_tokens":10759}}'
+    ;;
+  billable-live-over-cap)
+    printf '%s\n' '{"type":"thread.started","thread_id":"fake-billable-over-cap-session"}'
+    printf '%s\n' '{"type":"turn.progress","usage":{"input_tokens":130000,"cached_input_tokens":1000,"output_tokens":10000}}'
+    sleep 5
+    ;;
+  billable-post-exit-over-cap)
+    printf '%s\n' '{"type":"thread.started","thread_id":"fake-billable-post-exit-session"}'
+    printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":120000,"cached_input_tokens":0,"output_tokens":1}}'
     exit 0
     ;;
   output-limit)
