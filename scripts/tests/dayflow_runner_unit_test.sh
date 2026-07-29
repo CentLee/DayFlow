@@ -21,6 +21,8 @@ export FAKE_CURL_LOG="$TEST_TMP/curl.log"
 # shellcheck source=scripts/lib/dayflow_runner.sh
 source "$ROOT_DIR/scripts/lib/dayflow_runner.sh"
 
+assert_eq '220000' "$DAYFLOW_TOKEN_LIMIT" 'default aggregate billable token limit'
+
 mkdir -p "$DAYFLOW_LEGACY_RUNTIME_DIR/gh" "$DAYFLOW_LEGACY_RUNTIME_DIR/artifacts"
 printf '%s\n' 'legacy-auth' >"$DAYFLOW_LEGACY_RUNTIME_DIR/gh/hosts.yml"
 printf '%s\n' 'DAYFLOW_DISCORD_WEBHOOK_URL=https://legacy.test/webhook' >"$DAYFLOW_LEGACY_RUNTIME_DIR/notifications.env"

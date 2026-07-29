@@ -73,7 +73,7 @@ Codex subprocesses receive no Linear, GitHub, or Discord credential variables. P
 
 `product-agent`, `integration-agent`, and `review-agent` use `gpt-5.6-terra/high`. `backend-agent` and `ios-agent` use `gpt-5.6-terra/medium`. There is no fallback.
 
-The default execution sandbox is `workspace-write`, approval policy is `never`, and review is read-only. The aggregate issue token limit is 120K **billable tokens**: uncached input plus output. Cached input does not consume the cap, but raw input, cached input, uncached input, output, raw totals, and billable totals remain persisted for diagnostics. Admission, live monitoring, persistence, and post-exit guards all use billable totals. Prompt, command-output, no-progress, and wall-clock bounds are enforced by the runner. Supervisor dispatch inherits these per-issue limits and does not create a separate token budget. Breaches terminate the child process, preserve state, and block the issue.
+The default execution sandbox is `workspace-write`, approval policy is `never`, and review is read-only. The aggregate issue token limit is 220K **billable tokens**: uncached input plus output. Cached input does not consume the cap, but raw input, cached input, uncached input, output, raw totals, and billable totals remain persisted for diagnostics. Admission, live monitoring, persistence, and post-exit guards all use billable totals. Prompt, command-output, no-progress, and wall-clock bounds are enforced by the runner. Supervisor dispatch inherits these per-issue limits and does not create a separate token budget. Breaches terminate the child process, preserve state, and block the issue.
 
 ## Reconciliation
 
