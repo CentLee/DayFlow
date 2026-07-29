@@ -21,7 +21,10 @@ export FAKE_CURL_LOG="$TEST_TMP/curl.log"
 # shellcheck source=scripts/lib/dayflow_runner.sh
 source "$ROOT_DIR/scripts/lib/dayflow_runner.sh"
 
-assert_eq '220000' "$DAYFLOW_TOKEN_LIMIT" 'default aggregate billable token limit'
+assert_eq '400000' "$DAYFLOW_TOKEN_LIMIT" 'default aggregate billable token limit'
+assert_eq '220000' "$DAYFLOW_PRIMARY_TOKEN_LIMIT" 'default primary billable token limit'
+assert_eq '100000' "$DAYFLOW_REVIEW_TOKEN_LIMIT" 'default review billable token limit'
+assert_eq '180000' "$DAYFLOW_REMEDIATION_TOKEN_LIMIT" 'default remediation billable token limit'
 
 mkdir -p "$DAYFLOW_LEGACY_RUNTIME_DIR/gh" "$DAYFLOW_LEGACY_RUNTIME_DIR/artifacts"
 printf '%s\n' 'legacy-auth' >"$DAYFLOW_LEGACY_RUNTIME_DIR/gh/hosts.yml"
@@ -270,6 +273,30 @@ assert_eq '150' "$(jq -r '.usage.cached_input_tokens' "$DAYFLOW_STATE_ROOT/CEN-3
 assert_eq '50' "$(jq -r '.usage.uncached_input_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'late uncached usage persisted'
 assert_eq '220' "$(jq -r '.usage.raw_total_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'late raw usage persisted separately'
 assert_eq '70' "$(jq -r '.usage.billable_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'late billable usage persisted separately'
+
+printf '%s\n' '{"billable_tokens":0}' >"$DAYFLOW_STATE_ROOT/CEN-42.json"
+export FAKE_CODEX_MODE=success
+DAYFLOW_TOKEN_LIMIT=1000
+DAYFLOW_PRIMARY_TOKEN_LIMIT=1000
+DAYFLOW_REVIEW_TOKEN_LIMIT=1000
+DAYFLOW_REMEDIATION_TOKEN_LIMIT=100
+if ! dayflow_execute_bounded CEN-42 primary-resume "$execution_worktree" fake-model medium session "$prompt" "$TEST_TMP/remediation.jsonl" "$output" remediation; then
+  test_fail 'remediation usage within its own budget should complete'
+fi
+assert_eq '75' "$(jq -r '.phase_usage.remediation.billable_tokens' "$DAYFLOW_STATE_ROOT/CEN-42.json")" 'remediation billable usage persists independently'
+assert_eq '1' "$(jq -r '.phase_usage.remediation.invocations' "$DAYFLOW_STATE_ROOT/CEN-42.json")" 'remediation invocation count persists independently'
+
+printf '%s\n' '{"billable_tokens":75,"phase_usage":{"remediation":{"billable_tokens":100,"invocations":1}}}' >"$DAYFLOW_STATE_ROOT/CEN-43.json"
+export FAKE_CODEX_INVOCATION_COUNT_FILE="$TEST_TMP/remediation-prelaunch-count"
+if dayflow_execute_bounded CEN-43 primary-resume "$execution_worktree" fake-model medium session "$prompt" "$TEST_TMP/remediation-prelaunch.jsonl" "$output" remediation; then
+  test_fail 'exhausted remediation budget should fail before Codex launch'
+fi
+assert_eq 'remediation token limit reached before launch (100)' "$DAYFLOW_EXECUTION_ERROR" 'remediation prelaunch limit reason'
+assert_failure 'remediation prelaunch rejection must not invoke Codex' test -e "$FAKE_CODEX_INVOCATION_COUNT_FILE"
+unset FAKE_CODEX_INVOCATION_COUNT_FILE
+DAYFLOW_PRIMARY_TOKEN_LIMIT=220000
+DAYFLOW_REVIEW_TOKEN_LIMIT=100000
+DAYFLOW_REMEDIATION_TOKEN_LIMIT=180000
 
 printf '%s\n' '{"billable_tokens":0}' >"$DAYFLOW_STATE_ROOT/CEN-38.json"
 export FAKE_CODEX_MODE=cached-live-under-cap

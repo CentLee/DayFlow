@@ -33,7 +33,10 @@ DAYFLOW_CURL_BIN="${DAYFLOW_CURL_BIN:-curl}"
 DAYFLOW_PERL_BIN="${DAYFLOW_PERL_BIN:-perl}"
 DAYFLOW_EXECUTION_LIMIT_SECONDS="${DAYFLOW_EXECUTION_LIMIT_SECONDS:-1200}"
 DAYFLOW_STALL_LIMIT_SECONDS="${DAYFLOW_STALL_LIMIT_SECONDS:-300}"
-DAYFLOW_TOKEN_LIMIT="${DAYFLOW_TOKEN_LIMIT:-220000}"
+DAYFLOW_TOKEN_LIMIT="${DAYFLOW_TOKEN_LIMIT:-400000}"
+DAYFLOW_PRIMARY_TOKEN_LIMIT="${DAYFLOW_PRIMARY_TOKEN_LIMIT:-220000}"
+DAYFLOW_REVIEW_TOKEN_LIMIT="${DAYFLOW_REVIEW_TOKEN_LIMIT:-100000}"
+DAYFLOW_REMEDIATION_TOKEN_LIMIT="${DAYFLOW_REMEDIATION_TOKEN_LIMIT:-180000}"
 DAYFLOW_PROMPT_LIMIT_BYTES="${DAYFLOW_PROMPT_LIMIT_BYTES:-32768}"
 DAYFLOW_LOG_LIMIT_BYTES="${DAYFLOW_LOG_LIMIT_BYTES:-5242880}"
 DAYFLOW_MONITOR_INTERVAL_SECONDS="${DAYFLOW_MONITOR_INTERVAL_SECONDS:-2}"
@@ -888,6 +891,39 @@ dayflow_state_billable_tokens() {
   ' "$state_file"
 }
 
+dayflow_execution_phase_for_mode() {
+  case "$1" in
+    primary-new|primary-resume) printf '%s\n' primary ;;
+    review) printf '%s\n' review ;;
+    remediation) printf '%s\n' remediation ;;
+    *) return 1 ;;
+  esac
+}
+
+dayflow_phase_token_limit() {
+  case "$1" in
+    primary) printf '%s\n' "$DAYFLOW_PRIMARY_TOKEN_LIMIT" ;;
+    review) printf '%s\n' "$DAYFLOW_REVIEW_TOKEN_LIMIT" ;;
+    remediation) printf '%s\n' "$DAYFLOW_REMEDIATION_TOKEN_LIMIT" ;;
+    *) return 1 ;;
+  esac
+}
+
+dayflow_state_phase_billable_tokens() {
+  local issue_key="$1"
+  local phase="$2"
+  local state_file
+  state_file="$(dayflow_state_file "$issue_key")"
+  [[ -f "$state_file" ]] || {
+    printf '%s\n' '0'
+    return
+  }
+  jq -er --arg phase "$phase" '
+    .phase_usage[$phase].billable_tokens as $tokens
+    | if ($tokens | type) == "number" and $tokens >= 0 then $tokens else 0 end
+  ' "$state_file"
+}
+
 dayflow_jsonl_session_id() {
   local log_file="$1"
   jq -R -sr 'split("\n") | map(fromjson? // empty) | [.[] | select(.type == "thread.started" or .type == "thread_started") | (.thread_id // .threadId // .id)] | map(select(. != null)) | first // empty' "$log_file" 2>/dev/null
@@ -1003,7 +1039,8 @@ dayflow_execute_bounded() {
   local prompt_file="$7"
   local log_file="$8"
   local output_file="$9"
-  local started_at now last_progress last_size=0 size elapsed invocation_billable_tokens aggregate_billable_tokens pid rc=0 limit_reason=""
+  local phase="${10:-}" phase_limit phase_billable_tokens aggregate_billable_tokens
+  local started_at now last_progress last_size=0 size elapsed invocation_billable_tokens pid rc=0 limit_reason=""
   local prompt_size invocation_usage input_tokens cached_input_tokens uncached_input_tokens output_tokens raw_total_tokens
   local restore_job_control=false
 
@@ -1014,6 +1051,24 @@ dayflow_execute_bounded() {
     return 124
   fi
 
+  if [[ -z "$phase" ]]; then
+    phase="$(dayflow_execution_phase_for_mode "$mode")" || {
+      DAYFLOW_EXECUTION_ERROR="unsupported execution phase for mode: $mode"
+      export DAYFLOW_EXECUTION_ERROR
+      return 124
+    }
+  fi
+  phase_limit="$(dayflow_phase_token_limit "$phase")" || {
+    DAYFLOW_EXECUTION_ERROR="unsupported execution phase: $phase"
+    export DAYFLOW_EXECUTION_ERROR
+    return 124
+  }
+  [[ "$phase_limit" =~ ^[0-9]+$ ]] || {
+    DAYFLOW_EXECUTION_ERROR="invalid token limit for phase $phase"
+    export DAYFLOW_EXECUTION_ERROR
+    return 124
+  }
+
   aggregate_billable_tokens="$(dayflow_state_billable_tokens "$issue_key")" || {
     DAYFLOW_EXECUTION_ERROR='billable token accounting is unavailable; refusing to launch'
     export DAYFLOW_EXECUTION_ERROR
@@ -1021,6 +1076,16 @@ dayflow_execute_bounded() {
   }
   if (( aggregate_billable_tokens >= DAYFLOW_TOKEN_LIMIT )); then
     DAYFLOW_EXECUTION_ERROR="token limit reached before launch (${DAYFLOW_TOKEN_LIMIT})"
+    export DAYFLOW_EXECUTION_ERROR
+    return 124
+  fi
+  phase_billable_tokens="$(dayflow_state_phase_billable_tokens "$issue_key" "$phase")" || {
+    DAYFLOW_EXECUTION_ERROR='phase token accounting is unavailable; refusing to launch'
+    export DAYFLOW_EXECUTION_ERROR
+    return 124
+  }
+  if (( phase_billable_tokens >= phase_limit )); then
+    DAYFLOW_EXECUTION_ERROR="${phase} token limit reached before launch (${phase_limit})"
     export DAYFLOW_EXECUTION_ERROR
     return 124
   fi
@@ -1065,6 +1130,8 @@ dayflow_execute_bounded() {
       limit_reason="command output limit exceeded (${DAYFLOW_LOG_LIMIT_BYTES} bytes)"
     elif (( aggregate_billable_tokens + invocation_billable_tokens >= DAYFLOW_TOKEN_LIMIT )); then
       limit_reason="token limit exceeded (${DAYFLOW_TOKEN_LIMIT})"
+    elif (( phase_billable_tokens + invocation_billable_tokens >= phase_limit )); then
+      limit_reason="${phase} token limit exceeded (${phase_limit})"
     elif (( now - last_progress >= DAYFLOW_STALL_LIMIT_SECONDS )); then
       limit_reason="no progress for ${DAYFLOW_STALL_LIMIT_SECONDS}s"
     elif (( elapsed >= DAYFLOW_EXECUTION_LIMIT_SECONDS )); then
@@ -1098,6 +1165,7 @@ dayflow_execute_bounded() {
     return 124
   }
   aggregate_billable_tokens=$((aggregate_billable_tokens + invocation_billable_tokens))
+  phase_billable_tokens=$((phase_billable_tokens + invocation_billable_tokens))
   dayflow_state_update "$issue_key" \
     --argjson billable "$aggregate_billable_tokens" \
     --argjson invocation_billable "$invocation_billable_tokens" \
@@ -1106,6 +1174,9 @@ dayflow_execute_bounded() {
     --argjson uncached "$uncached_input_tokens" \
     --argjson output "$output_tokens" \
     --argjson raw_total "$raw_total_tokens" \
+    --arg phase "$phase" \
+    --argjson phase_billable "$phase_billable_tokens" \
+    --argjson phase_invocation "$invocation_billable_tokens" \
     --arg at "$(dayflow_now_iso)" \
     '.billable_tokens = $billable
      | .usage = ((.usage // {input_tokens: 0, cached_input_tokens: 0, uncached_input_tokens: 0, output_tokens: 0, raw_total_tokens: 0, billable_tokens: 0, invocations: 0})
@@ -1116,11 +1187,19 @@ dayflow_execute_bounded() {
        | .raw_total_tokens += $raw_total
        | .billable_tokens += $invocation_billable
        | .invocations += 1)
+     | .phase_usage = ((.phase_usage // {})
+       | .[$phase] = ((.[$phase] // {billable_tokens: 0, invocations: 0})
+         | .billable_tokens = $phase_billable
+         | .invocations += 1
+         | .last_invocation_billable_tokens = $phase_invocation))
      | del(.tokens_used)
      | .updated_at = $at'
 
   if [[ -z "$limit_reason" && "$rc" == "0" ]] && (( aggregate_billable_tokens >= DAYFLOW_TOKEN_LIMIT )); then
     limit_reason="token limit exceeded after process exit (${DAYFLOW_TOKEN_LIMIT})"
+    rc=124
+  elif [[ -z "$limit_reason" && "$rc" == "0" ]] && (( phase_billable_tokens >= phase_limit )); then
+    limit_reason="${phase} token limit exceeded after process exit (${phase_limit})"
     rc=124
   fi
 
@@ -2043,7 +2122,7 @@ dayflow_run_issue() {
       printf 'Address only the P0-P2 review findings below, then re-run focused tests. Edit/test only: do not stage, commit, push, use gh, update proof, or change lifecycle state. Do not dump whole files, logs, trees, or repository diffs. The deterministic runner owns publication.\n\n'
       jq '.' "$review_output"
     } >"$remediation_prompt"
-    if ! dayflow_execute_bounded "$issue_key" primary-resume "$worktree" "$model" "$reasoning" "$session_id" "$remediation_prompt" "$remediation_log" "$remediation_output"; then
+    if ! dayflow_execute_bounded "$issue_key" primary-resume "$worktree" "$model" "$reasoning" "$session_id" "$remediation_prompt" "$remediation_log" "$remediation_output" remediation; then
       dayflow_block_issue "$issue_json" "$DAYFLOW_EXECUTION_ERROR"
       return 1
     fi
