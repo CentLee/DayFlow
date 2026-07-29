@@ -68,7 +68,7 @@ Primary execution uses `workspace-write` and approval policy `never`. Review use
 
 ## Bounds and Review
 
-The supervisor adds no model invocation or token pool. Every dispatched issue inherits the runner's resource boundaries, including its 120,000 aggregate **billable** token ceiling, prompt and output caps, 20-minute invocation limit, and five-minute no-progress limit. Billable tokens are uncached input plus output; cached input remains separately persisted as raw observability and never consumes `DAYFLOW_TOKEN_LIMIT`. Admission, live monitoring, persisted aggregate accounting, and post-exit checks use that same billable value. A limit breach preserves the worktree and blocks the issue.
+The supervisor adds no model invocation or token pool. Every dispatched issue inherits the runner's resource boundaries, including its 220,000 aggregate **billable** token ceiling, prompt and output caps, 20-minute invocation limit, and five-minute no-progress limit. Billable tokens are uncached input plus output; cached input remains separately persisted as raw observability and never consumes `DAYFLOW_TOKEN_LIMIT`. Admission, live monitoring, persisted aggregate accounting, and post-exit checks use that same billable value. A limit breach preserves the worktree and blocks the issue.
 
 The Primary Agent must leave a pushed branch, at least one commit beyond `origin/<declared-base>`, an open PR targeting that base, and non-empty proof sections. The runner then invokes `review-agent` with `gpt-5.6-terra/high`. P0-P2 findings are posted to the PR and returned once to the same Primary Agent session. A second blocking review result blocks the issue.
 
