@@ -214,7 +214,7 @@ dayflow_supervisor_resume_candidate_valid() {
   state_file="$(dayflow_state_file "$issue_key")"
   [[ -f "$state_file" && ! -e "$DAYFLOW_SUPERVISOR_CLAIM_ROOT/$issue_key.json" ]] || return 1
   status="$(jq -r '.status // ""' "$state_file")"
-  case "$status" in review-changes|publication-retry) ;; *) return 1 ;; esac
+  case "$status" in review-changes|publication-retry|token-accounting-recovery) ;; *) return 1 ;; esac
   jq -e --arg key "$issue_key" '
     any(.issues[]; .identifier == $key
       and (.state == "In Progress" or .state == "In Review")

@@ -59,6 +59,11 @@ assert_success 'owned review changes dispatch automatically' dayflow_supervisor_
 assert_file_contains "$resume_dispatch_log" '^run CEN-50$' 'owned remediation was dispatched before Todo'
 DAYFLOW_SUPERVISOR_RUNNER_BIN="$saved_supervisor_runner_bin"
 
+jq -n --arg worktree "$resume_worktree" '{issue:"CEN-50",status:"token-accounting-recovery",worktree:$worktree,branch:"feature/tasks-50-remediation",session_id:"owned-session",primary_agent:"integration-agent",model:"gpt-5.6-terra",reasoning:"high",publication:{phase:"edited"},test_evidence:{summary:"fixture",tests:[{name:"focused",status:"passed"}]}}' \
+  >"$DAYFLOW_STATE_ROOT/CEN-50.json"
+token_recovery_candidates="$(dayflow_supervisor_candidates "$resume_snapshot")"
+assert_eq 'CEN-50' "$(head -n 1 <<<"$token_recovery_candidates")" 'owned token-accounting recovery is prioritized before Todo'
+
 jq -n --arg worktree "$resume_worktree" '{issue:"CEN-50",status:"publication-retry",worktree:$worktree,branch:"feature/tasks-50-remediation",session_id:"owned-session",primary_agent:"integration-agent",model:"gpt-5.6-terra",reasoning:"high",publication:{phase:"committed",head_sha:"fixture-head"},test_evidence:{summary:"fixture",tests:[{name:"focused",status:"passed"}]}}' \
   >"$DAYFLOW_STATE_ROOT/CEN-50.json"
 printf '%s\n' '{"identifier":"CEN-50","pid":999999,"process_start":"stale","parallel_safe":true,"write_scopes":["docs/remediation"]}' \
