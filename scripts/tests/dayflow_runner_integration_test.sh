@@ -69,7 +69,7 @@ run_missing_test_evidence_test() {
   fi
   assert_eq 'blocked' "$(jq -r '.status' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'missing test evidence blocks issue'
   assert_failure 'missing test evidence creates no commit' git -C "$DAYFLOW_WORKTREE_ROOT/CEN-29" rev-parse HEAD^ >/dev/null 2>&1
-  assert_failure 'missing test evidence creates no PR' rg -q 'pr create\|pr edit' "$FAKE_GH_LOG"
+  assert_failure 'missing test evidence creates no PR' rg -q 'pr create\|pulls/.+PATCH' "$FAKE_GH_LOG"
   rm -rf "$test_root"
 }
 
@@ -96,7 +96,7 @@ run_review_remediation_test() {
   assert_eq '2' "$commit_count" 'runner owns primary and remediation commits'
   assert_file_contains <(git -C "$worktree" log --format=%s origin/develop..HEAD) '^feat\(CEN-29\):' 'runner-generated commit subject'
   assert_file_contains "$FAKE_GH_LOG" "GH_CONFIG_DIR=$DAYFLOW_RUNTIME_DIR/gh :: auth status" 'canonical GitHub auth reaches issue worktree publication'
-  assert_file_contains "$FAKE_GH_LOG" 'pr edit' 'runner owns PR proof publication'
+  assert_file_contains "$FAKE_GH_LOG" 'api -X PATCH repos/test/dayflow/pulls/' 'runner owns PR proof publication'
   assert_file_contains "$FAKE_CODEX_LOG" 'mcp_servers=\{\}' 'irrelevant MCP startup disabled'
   assert_failure 'model never receives danger-full-access' rg -q 'danger-full-access' "$FAKE_CODEX_LOG"
   rm -rf "$test_root"
