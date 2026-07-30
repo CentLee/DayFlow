@@ -1243,6 +1243,18 @@ dayflow_pr_for_branch() {
     --json number,url,isDraft,state,headRefName,headRefOid,baseRefName,mergeStateStatus,body
 }
 
+dayflow_update_pr() {
+  local repo="$1"
+  local pr_number="$2"
+  local title="$3"
+  local body_file="$4"
+  local body
+  body="$(<"$body_file")"
+  dayflow_gh api -X PATCH "repos/$repo/pulls/$pr_number" \
+    -f title="$title" \
+    -f body="$body" >/dev/null
+}
+
 dayflow_path_matches_scope() {
   local path="$1"
   local scope="$2"
@@ -1566,7 +1578,7 @@ dayflow_publish_issue_changes() {
       dayflow_mark_publication_unsafe "$issue_key" 'existing PR does not match publication branch, base, and head'
       return
     }
-    dayflow_gh pr edit -R "$repo" "$pr_number" --title "${issue_key}: ${commit_title}" --body-file "$body_file" >/dev/null || return 1
+    dayflow_update_pr "$repo" "$pr_number" "${issue_key}: ${commit_title}" "$body_file" || return 1
     if [[ "$(jq -r '.[0].isDraft // true' <<<"$prs")" != "true" ]]; then
       dayflow_gh pr ready -R "$repo" --undo "$pr_number" >/dev/null || return 1
     fi
