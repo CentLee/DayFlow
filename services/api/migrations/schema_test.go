@@ -120,6 +120,8 @@ func TestTwoPersonTopologySchemaAddsIdentityAndQuarantineGuards(t *testing.T) {
 		"ADD COLUMN google_subject TEXT",
 		"ADD COLUMN email_normalized TEXT",
 		"CHECK (kind IN ('personal', 'shared', 'household', 'archived'))",
+		"ADD CONSTRAINT users_two_person_identity_check",
+		"household_role IN ('owner', 'partner')",
 		"CREATE UNIQUE INDEX users_household_role_idx",
 		"CREATE UNIQUE INDEX users_google_subject_idx",
 		"CREATE UNIQUE INDEX users_email_normalized_idx",

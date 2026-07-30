@@ -73,10 +73,11 @@ func applyTwoPersonTopology(ctx context.Context, db *sql.DB, topology IdentityTo
 	if err != nil {
 		return err
 	}
-	if err := validatePersonalCalendars(ctx, tx, users); err != nil {
+	personalCalendarIDs, err := resolvePersonalCalendars(ctx, tx, users)
+	if err != nil {
 		return err
 	}
-	householdID, err := resolveHouseholdCalendar(ctx, tx)
+	householdID, err := resolveHouseholdCalendar(ctx, tx, personalCalendarIDs)
 	if err != nil {
 		return err
 	}
@@ -89,6 +90,11 @@ SET household_role = CASE id WHEN $1 THEN 'owner' WHEN $2 THEN 'partner' END,
 WHERE id IN ($1, $2)`, users[0].id, users[1].id, topology.OwnerSubject, topology.PartnerSubject); err != nil {
 		return fmt.Errorf("bind topology users: %w", err)
 	}
+	for _, calendarID := range personalCalendarIDs {
+		if _, err := tx.ExecContext(ctx, `UPDATE calendars SET kind = 'personal' WHERE id = $1`, calendarID); err != nil {
+			return fmt.Errorf("preserve personal calendar %s: %w", calendarID, err)
+		}
+	}
 
 	if householdID == "" {
 		householdID = "cal_household"
@@ -100,6 +106,10 @@ VALUES ($1, NULL, 'household', 'Household', '#1F6B5C')`, householdID); err != ni
 	} else if _, err := tx.ExecContext(ctx, `
 UPDATE calendars SET kind = 'household', owner_user_id = NULL WHERE id = $1`, householdID); err != nil {
 		return fmt.Errorf("designate household calendar: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+DELETE FROM calendar_members WHERE calendar_id = $1 AND user_id NOT IN ($2, $3)`, householdID, users[0].id, users[1].id); err != nil {
+		return fmt.Errorf("remove legacy household members: %w", err)
 	}
 
 	for _, user := range users {
@@ -148,36 +158,44 @@ FOR UPDATE`, topology.OwnerEmail, topology.PartnerEmail)
 	return [2]topologyUser{owner, partner}, nil
 }
 
-func validatePersonalCalendars(ctx context.Context, tx *sql.Tx, users [2]topologyUser) error {
+func resolvePersonalCalendars(ctx context.Context, tx *sql.Tx, users [2]topologyUser) ([2]string, error) {
 	rows, err := tx.QueryContext(ctx, `
-SELECT owner_user_id
-FROM calendars
-WHERE kind = 'personal' AND owner_user_id IN ($1, $2)
+SELECT c.id, c.owner_user_id
+FROM calendars c
+WHERE c.kind IN ('personal', 'shared')
+  AND c.owner_user_id IN ($1, $2)
+  AND NOT EXISTS (
+      SELECT 1 FROM calendar_members cm
+      WHERE cm.calendar_id = c.id AND cm.user_id <> c.owner_user_id
+  )
 FOR UPDATE`, users[0].id, users[1].id)
 	if err != nil {
-		return fmt.Errorf("load personal calendars: %w", err)
+		return [2]string{}, fmt.Errorf("load personal calendars: %w", err)
 	}
 	defer rows.Close()
-	counts := map[string]int{}
+	calendarIDs := map[string][]string{}
 	for rows.Next() {
+		var calendarID string
 		var userID string
-		if err := rows.Scan(&userID); err != nil {
-			return fmt.Errorf("scan personal calendar owner: %w", err)
+		if err := rows.Scan(&calendarID, &userID); err != nil {
+			return [2]string{}, fmt.Errorf("scan personal calendar owner: %w", err)
 		}
-		counts[userID]++
+		calendarIDs[userID] = append(calendarIDs[userID], calendarID)
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate personal calendars: %w", err)
+		return [2]string{}, fmt.Errorf("iterate personal calendars: %w", err)
 	}
-	if counts[users[0].id] != 1 || counts[users[1].id] != 1 {
-		return fmt.Errorf("each mapped user must have exactly one personal calendar")
+	if len(calendarIDs[users[0].id]) != 1 || len(calendarIDs[users[1].id]) != 1 {
+		return [2]string{}, fmt.Errorf("each mapped user must have exactly one personal calendar")
 	}
-	return nil
+	return [2]string{calendarIDs[users[0].id][0], calendarIDs[users[1].id][0]}, nil
 }
 
-func resolveHouseholdCalendar(ctx context.Context, tx *sql.Tx) (string, error) {
+func resolveHouseholdCalendar(ctx context.Context, tx *sql.Tx, personalCalendarIDs [2]string) (string, error) {
 	rows, err := tx.QueryContext(ctx, `
-SELECT id FROM calendars WHERE kind IN ('shared', 'household') FOR UPDATE`)
+SELECT id FROM calendars
+WHERE kind IN ('shared', 'household') AND id NOT IN ($1, $2)
+FOR UPDATE`, personalCalendarIDs[0], personalCalendarIDs[1])
 	if err != nil {
 		return "", fmt.Errorf("load household calendar candidates: %w", err)
 	}

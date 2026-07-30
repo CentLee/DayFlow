@@ -11,6 +11,17 @@ ALTER TABLE calendars
     ADD CONSTRAINT calendars_kind_check
     CHECK (kind IN ('personal', 'shared', 'household', 'archived'));
 
+ALTER TABLE users
+    ADD CONSTRAINT users_two_person_identity_check
+    CHECK (
+        (household_role IS NULL AND google_subject IS NULL AND email_normalized IS NULL)
+        OR (
+            household_role IN ('owner', 'partner')
+            AND google_subject IS NOT NULL
+            AND email_normalized IS NOT NULL
+        )
+    );
+
 CREATE UNIQUE INDEX users_household_role_idx
     ON users (household_role)
     WHERE household_role IS NOT NULL;
