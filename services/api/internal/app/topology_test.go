@@ -69,15 +69,15 @@ FOR UPDATE`)).
 			AddRow("usr_owner", "Owner@Example.com").
 			AddRow("usr_partner", "partner@example.com"))
 	mock.ExpectQuery(regexp.QuoteMeta(`
-SELECT c.id, c.owner_user_id
+SELECT c.id, c.owner_user_id, c.kind
 FROM calendars c
 WHERE c.kind IN ('personal', 'shared')
   AND c.owner_user_id IN ($1, $2)
 FOR UPDATE`)).
 		WithArgs("usr_owner", "usr_partner").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id"}).
-			AddRow("cal_owner_personal", "usr_owner").
-			AddRow("cal_partner_personal", "usr_partner"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "kind"}).
+			AddRow("cal_owner_personal", "usr_owner", "personal").
+			AddRow("cal_partner_personal", "usr_partner", "personal"))
 	mock.ExpectQuery(regexp.QuoteMeta(`
 	SELECT id FROM calendars
 WHERE kind IN ('shared', 'household') AND id NOT IN ($1, $2)
@@ -130,15 +130,15 @@ func TestResolvePersonalCalendarsSelectsLegacyCalendarsWithStaleMembers(t *testi
 		t.Fatalf("begin transaction: %v", err)
 	}
 	mock.ExpectQuery(regexp.QuoteMeta(`
-SELECT c.id, c.owner_user_id
+SELECT c.id, c.owner_user_id, c.kind
 FROM calendars c
 WHERE c.kind IN ('personal', 'shared')
   AND c.owner_user_id IN ($1, $2)
 FOR UPDATE`)).
 		WithArgs("usr_owner", "usr_partner").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id"}).
-			AddRow("cal_owner_legacy", "usr_owner").
-			AddRow("cal_partner_legacy", "usr_partner"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "kind"}).
+			AddRow("cal_owner_legacy", "usr_owner", "shared").
+			AddRow("cal_partner_legacy", "usr_partner", "shared"))
 	mock.ExpectRollback()
 
 	calendarIDs, err := resolvePersonalCalendars(context.Background(), tx, [2]topologyUser{
@@ -156,6 +156,89 @@ FOR UPDATE`)).
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("legacy members must not exclude owned calendars: %v", err)
+	}
+}
+
+func TestResolvePersonalCalendarsPrefersPersonalOverOwnedSharedCalendar(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	mock.ExpectQuery(regexp.QuoteMeta(`
+SELECT c.id, c.owner_user_id, c.kind
+FROM calendars c
+WHERE c.kind IN ('personal', 'shared')
+  AND c.owner_user_id IN ($1, $2)
+FOR UPDATE`)).
+		WithArgs("usr_owner", "usr_partner").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "kind"}).
+			AddRow("cal_owner_personal", "usr_owner", "personal").
+			AddRow("cal_owner_shared", "usr_owner", "shared").
+			AddRow("cal_partner_personal", "usr_partner", "personal"))
+	mock.ExpectRollback()
+
+	calendarIDs, err := resolvePersonalCalendars(context.Background(), tx, [2]topologyUser{
+		{id: "usr_owner"},
+		{id: "usr_partner"},
+	})
+	if err != nil {
+		t.Fatalf("resolve personal calendars: %v", err)
+	}
+	if calendarIDs != [2]string{"cal_owner_personal", "cal_partner_personal"} {
+		t.Fatalf("calendar IDs = %v, want personal calendars", calendarIDs)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("rollback transaction: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("personal calendar must win over owned shared calendar: %v", err)
+	}
+}
+
+func TestResolvePersonalCalendarsRejectsAmbiguousLegacySharedFallback(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	mock.ExpectQuery(regexp.QuoteMeta(`
+SELECT c.id, c.owner_user_id, c.kind
+FROM calendars c
+WHERE c.kind IN ('personal', 'shared')
+  AND c.owner_user_id IN ($1, $2)
+FOR UPDATE`)).
+		WithArgs("usr_owner", "usr_partner").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id", "kind"}).
+			AddRow("cal_owner_legacy_a", "usr_owner", "shared").
+			AddRow("cal_owner_legacy_b", "usr_owner", "shared").
+			AddRow("cal_partner_legacy", "usr_partner", "shared"))
+	mock.ExpectRollback()
+
+	_, err = resolvePersonalCalendars(context.Background(), tx, [2]topologyUser{
+		{id: "usr_owner"},
+		{id: "usr_partner"},
+	})
+	if err == nil {
+		t.Fatal("expected ambiguous legacy shared calendars to be rejected")
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("rollback transaction: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("ambiguous legacy calendars must not be selected: %v", err)
 	}
 }
 

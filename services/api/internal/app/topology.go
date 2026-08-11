@@ -163,7 +163,7 @@ FOR UPDATE`, topology.OwnerEmail, topology.PartnerEmail)
 
 func resolvePersonalCalendars(ctx context.Context, tx *sql.Tx, users [2]topologyUser) ([2]string, error) {
 	rows, err := tx.QueryContext(ctx, `
-SELECT c.id, c.owner_user_id
+SELECT c.id, c.owner_user_id, c.kind
 FROM calendars c
 WHERE c.kind IN ('personal', 'shared')
   AND c.owner_user_id IN ($1, $2)
@@ -172,22 +172,39 @@ FOR UPDATE`, users[0].id, users[1].id)
 		return [2]string{}, fmt.Errorf("load personal calendars: %w", err)
 	}
 	defer rows.Close()
-	calendarIDs := map[string][]string{}
+	candidates := map[string]map[string][]string{}
 	for rows.Next() {
 		var calendarID string
 		var userID string
-		if err := rows.Scan(&calendarID, &userID); err != nil {
+		var kind string
+		if err := rows.Scan(&calendarID, &userID, &kind); err != nil {
 			return [2]string{}, fmt.Errorf("scan personal calendar owner: %w", err)
 		}
-		calendarIDs[userID] = append(calendarIDs[userID], calendarID)
+		if candidates[userID] == nil {
+			candidates[userID] = map[string][]string{}
+		}
+		candidates[userID][kind] = append(candidates[userID][kind], calendarID)
 	}
 	if err := rows.Err(); err != nil {
 		return [2]string{}, fmt.Errorf("iterate personal calendars: %w", err)
 	}
-	if len(calendarIDs[users[0].id]) != 1 || len(calendarIDs[users[1].id]) != 1 {
-		return [2]string{}, fmt.Errorf("each mapped user must have exactly one personal calendar")
+	calendarIDs := [2]string{}
+	for index, user := range users {
+		personal := candidates[user.id]["personal"]
+		if len(personal) == 1 {
+			calendarIDs[index] = personal[0]
+			continue
+		}
+		if len(personal) > 1 {
+			return [2]string{}, fmt.Errorf("mapped user %s has ambiguous personal calendars", user.id)
+		}
+		shared := candidates[user.id]["shared"]
+		if len(shared) != 1 {
+			return [2]string{}, fmt.Errorf("mapped user %s must have exactly one personal calendar or legacy shared fallback", user.id)
+		}
+		calendarIDs[index] = shared[0]
 	}
-	return [2]string{calendarIDs[users[0].id][0], calendarIDs[users[1].id][0]}, nil
+	return calendarIDs, nil
 }
 
 func resolveHouseholdCalendar(ctx context.Context, tx *sql.Tx, personalCalendarIDs [2]string) (string, error) {
