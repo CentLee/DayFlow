@@ -27,6 +27,10 @@ services:
       DAYFLOW_DATABASE_URL: "postgres://dayflow:dayflow@postgres:5432/dayflow_test?sslmode=disable"
       DAYFLOW_AUTO_MIGRATE: "true"
       DAYFLOW_MIGRATIONS_DIR: "/app/migrations"
+      DAYFLOW_OWNER_GOOGLE_SUBJECT: "system-test-owner"
+      DAYFLOW_OWNER_EMAIL: "owner@dayflow.local"
+      DAYFLOW_PARTNER_GOOGLE_SUBJECT: "system-test-partner"
+      DAYFLOW_PARTNER_EMAIL: "editor@dayflow.local"
     ports:
       - "${DAYFLOW_API_HOST_PORT:-18080}:8080"
     healthcheck:

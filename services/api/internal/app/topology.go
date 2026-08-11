@@ -91,6 +91,9 @@ WHERE id IN ($1, $2)`, users[0].id, users[1].id, topology.OwnerSubject, topology
 		return fmt.Errorf("bind topology users: %w", err)
 	}
 	for _, calendarID := range personalCalendarIDs {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM calendar_members WHERE calendar_id = $1`, calendarID); err != nil {
+			return fmt.Errorf("remove legacy personal calendar members for %s: %w", calendarID, err)
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE calendars SET kind = 'personal' WHERE id = $1`, calendarID); err != nil {
 			return fmt.Errorf("preserve personal calendar %s: %w", calendarID, err)
 		}
@@ -164,10 +167,6 @@ SELECT c.id, c.owner_user_id
 FROM calendars c
 WHERE c.kind IN ('personal', 'shared')
   AND c.owner_user_id IN ($1, $2)
-  AND NOT EXISTS (
-      SELECT 1 FROM calendar_members cm
-      WHERE cm.calendar_id = c.id AND cm.user_id <> c.owner_user_id
-  )
 FOR UPDATE`, users[0].id, users[1].id)
 	if err != nil {
 		return [2]string{}, fmt.Errorf("load personal calendars: %w", err)

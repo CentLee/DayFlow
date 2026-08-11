@@ -111,6 +111,13 @@ func newRepository(cfg Config) (store.Repository, func() error, error) {
 			return nil, nil, err
 		}
 	}
+	postgresStore := store.NewPostgresStore(db)
+	if mode == StoreModePostgres && (cfg.SeedMode == SeedModeDemo || cfg.SeedMode == SeedModeTest) {
+		if err := postgresStore.EnsureDemoSeed(ctx); err != nil {
+			_ = db.Close()
+			return nil, nil, fmt.Errorf("seed postgres runtime fixtures: %w", err)
+		}
+	}
 	topology, err := topologyFromEnv()
 	if err != nil {
 		_ = db.Close()
@@ -130,14 +137,9 @@ func newRepository(cfg Config) (store.Repository, func() error, error) {
 		return hybrid, db.Close, nil
 	}
 
-	postgresStore := store.NewPostgresStore(db)
 	switch cfg.SeedMode {
 	case "", SeedModeNone:
 	case SeedModeDemo, SeedModeTest:
-		if err := postgresStore.EnsureDemoSeed(ctx); err != nil {
-			_ = db.Close()
-			return nil, nil, fmt.Errorf("seed postgres runtime: %w", err)
-		}
 	default:
 		_ = db.Close()
 		return nil, nil, fmt.Errorf("unsupported DAYFLOW_SEED_MODE %q", cfg.SeedMode)

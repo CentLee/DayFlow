@@ -52,7 +52,7 @@ FOR UPDATE`)).
 	}
 }
 
-func TestApplyTwoPersonTopologyPreservesMappedUsersAndProvisionsHousehold(t *testing.T) {
+func TestApplyTwoPersonTopologyRemovesLegacyPersonalMembersAndProvisionsHousehold(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -73,10 +73,6 @@ SELECT c.id, c.owner_user_id
 FROM calendars c
 WHERE c.kind IN ('personal', 'shared')
   AND c.owner_user_id IN ($1, $2)
-  AND NOT EXISTS (
-      SELECT 1 FROM calendar_members cm
-      WHERE cm.calendar_id = c.id AND cm.user_id <> c.owner_user_id
-  )
 FOR UPDATE`)).
 		WithArgs("usr_owner", "usr_partner").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id"}).
@@ -91,8 +87,12 @@ FOR UPDATE`)).
 	mock.ExpectExec("UPDATE users").
 		WithArgs("usr_owner", "usr_partner", "google-owner", "google-partner").
 		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM calendar_members WHERE calendar_id = $1`)).
+		WithArgs("cal_owner_personal").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE calendars SET kind = 'personal' WHERE id = .1").
 		WithArgs("cal_owner_personal").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM calendar_members WHERE calendar_id = $1`)).
+		WithArgs("cal_partner_personal").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE calendars SET kind = 'personal' WHERE id = .1").
 		WithArgs("cal_partner_personal").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE calendars SET kind = 'household', owner_user_id = NULL WHERE id = .1").
@@ -114,6 +114,48 @@ FOR UPDATE`)).
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("topology migration expectations: %v", err)
+	}
+}
+
+func TestResolvePersonalCalendarsSelectsLegacyCalendarsWithStaleMembers(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	mock.ExpectQuery(regexp.QuoteMeta(`
+SELECT c.id, c.owner_user_id
+FROM calendars c
+WHERE c.kind IN ('personal', 'shared')
+  AND c.owner_user_id IN ($1, $2)
+FOR UPDATE`)).
+		WithArgs("usr_owner", "usr_partner").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "owner_user_id"}).
+			AddRow("cal_owner_legacy", "usr_owner").
+			AddRow("cal_partner_legacy", "usr_partner"))
+	mock.ExpectRollback()
+
+	calendarIDs, err := resolvePersonalCalendars(context.Background(), tx, [2]topologyUser{
+		{id: "usr_owner"},
+		{id: "usr_partner"},
+	})
+	if err != nil {
+		t.Fatalf("resolve legacy personal calendars: %v", err)
+	}
+	if calendarIDs != [2]string{"cal_owner_legacy", "cal_partner_legacy"} {
+		t.Fatalf("legacy calendar IDs = %v, want owner and partner legacy calendars", calendarIDs)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("rollback transaction: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("legacy members must not exclude owned calendars: %v", err)
 	}
 }
 
