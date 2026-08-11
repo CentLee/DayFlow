@@ -9,7 +9,7 @@ source "$TEST_DIR/testlib.sh"
 source "$TEST_DIR/system_test_helpers.sh"
 
 run_commit_then_push_recovery_test() {
-  local test_root seed hook worktree
+  local test_root seed hook worktree runner_output publication_phase
   test_root="$(mktemp -d)"
   seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
   dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
@@ -19,10 +19,15 @@ run_commit_then_push_recovery_test() {
   hook="$test_root/remote.git/hooks/pre-receive"
   printf '%s\n' '#!/bin/sh' 'exit 1' >"$hook"
   chmod +x "$hook"
-  if "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null 2>&1; then
+  if runner_output="$("$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 2>&1)"; then
     test_fail 'push rejection should leave publication retry state'
   fi
-  assert_eq 'committed' "$(jq -r '.publication.phase' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'commit phase persisted before push failure'
+  publication_phase="$(jq -r '.publication.phase // "null"' "$DAYFLOW_STATE_ROOT/CEN-29.json")"
+  if [[ "$publication_phase" != 'committed' ]]; then
+    printf '%s\n' "$runner_output" >&2
+    test_fail "commit phase persisted before push failure: expected 'committed', got '$publication_phase'"
+  fi
+  TEST_COUNT=$((TEST_COUNT + 1))
   rm -f "$hook"
   "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
   assert_eq '1' "$(<"$FAKE_CODEX_PRIMARY_COUNT_FILE")" 'push retry invokes no additional primary model'
