@@ -10,7 +10,7 @@ Compare agent definitions, skills, issue metadata, runner behavior, CI, and docs
 
 ### One Lifecycle Owner
 
-Each issue has one Primary Agent. Sequential integration or review handoff is allowed, and queue dispatch is sequential by default. At most two separate issues may overlap only when each is explicitly `Parallel Safe` with a non-empty, nonoverlapping `Write Scope`. The owner returns for review remediation on the same session and branch.
+Each issue has one Primary Agent. Sequential integration or review handoff is allowed, and queue dispatch is sequential by default. At most two separate issues may overlap only when each is explicitly `Parallel Safe` with a non-empty, nonoverlapping `Write Scope`. The owner returns for review remediation on the same branch in a fresh bounded session.
 
 ### Models Follow Leverage
 

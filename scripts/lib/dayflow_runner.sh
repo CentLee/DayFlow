@@ -31,7 +31,12 @@ DAYFLOW_CODEX_BIN="${DAYFLOW_CODEX_BIN:-codex}"
 DAYFLOW_GH_BIN="${DAYFLOW_GH_BIN:-gh}"
 DAYFLOW_CURL_BIN="${DAYFLOW_CURL_BIN:-curl}"
 DAYFLOW_PERL_BIN="${DAYFLOW_PERL_BIN:-perl}"
-DAYFLOW_EXECUTION_LIMIT_SECONDS="${DAYFLOW_EXECUTION_LIMIT_SECONDS:-1200}"
+DAYFLOW_GIT_AUTHOR_NAME="${DAYFLOW_GIT_AUTHOR_NAME:-DayFlow Runner}"
+DAYFLOW_GIT_AUTHOR_EMAIL="${DAYFLOW_GIT_AUTHOR_EMAIL:-dayflow-runner@users.noreply.github.com}"
+DAYFLOW_EXECUTION_LIMIT_SECONDS="${DAYFLOW_EXECUTION_LIMIT_SECONDS:-}"
+DAYFLOW_PRIMARY_EXECUTION_LIMIT_SECONDS="${DAYFLOW_PRIMARY_EXECUTION_LIMIT_SECONDS:-${DAYFLOW_EXECUTION_LIMIT_SECONDS:-120}}"
+DAYFLOW_REVIEW_EXECUTION_LIMIT_SECONDS="${DAYFLOW_REVIEW_EXECUTION_LIMIT_SECONDS:-${DAYFLOW_EXECUTION_LIMIT_SECONDS:-90}}"
+DAYFLOW_REMEDIATION_EXECUTION_LIMIT_SECONDS="${DAYFLOW_REMEDIATION_EXECUTION_LIMIT_SECONDS:-${DAYFLOW_EXECUTION_LIMIT_SECONDS:-90}}"
 DAYFLOW_STALL_LIMIT_SECONDS="${DAYFLOW_STALL_LIMIT_SECONDS:-300}"
 DAYFLOW_TOKEN_LIMIT="${DAYFLOW_TOKEN_LIMIT:-400000}"
 DAYFLOW_PRIMARY_TOKEN_LIMIT="${DAYFLOW_PRIMARY_TOKEN_LIMIT:-220000}"
@@ -51,6 +56,7 @@ DAYFLOW_ACTIVE_MERGE_READY_LOCK_TOKEN=""
 DAYFLOW_ACTIVE_MERGE_READY_LOCK_PID=""
 DAYFLOW_ACTIVE_MERGE_READY_LOCK_IDENTITY=""
 DAYFLOW_CURRENT_BASH_PID=""
+DAYFLOW_EXECUTION_LATE_TOKEN_LIMIT="false"
 
 dayflow_error() {
   printf 'dayflow-runner: %s\n' "$*" >&2
@@ -657,7 +663,8 @@ dayflow_validate_publication_capability() {
     dayflow_error "GitHub token does not have push permission for $repo"
     return 1
   }
-  dayflow_git_publish "$worktree" push --dry-run origin "HEAD:refs/heads/$branch" >/dev/null 2>&1 || {
+  # Verify Git transport without invoking remote receive hooks before we have a commit to recover.
+  dayflow_git_publish "$worktree" ls-remote --heads origin >/dev/null 2>&1 || {
     dayflow_error 'Git transport publication preflight failed'
     return 1
   }
@@ -893,9 +900,18 @@ dayflow_state_billable_tokens() {
 
 dayflow_execution_phase_for_mode() {
   case "$1" in
-    primary-new|primary-resume) printf '%s\n' primary ;;
+    primary-new|primary-resume|primary-fresh) printf '%s\n' primary ;;
     review) printf '%s\n' review ;;
     remediation) printf '%s\n' remediation ;;
+    *) return 1 ;;
+  esac
+}
+
+dayflow_phase_execution_limit() {
+  case "$1" in
+    primary) printf '%s\n' "$DAYFLOW_PRIMARY_EXECUTION_LIMIT_SECONDS" ;;
+    review) printf '%s\n' "$DAYFLOW_REVIEW_EXECUTION_LIMIT_SECONDS" ;;
+    remediation) printf '%s\n' "$DAYFLOW_REMEDIATION_EXECUTION_LIMIT_SECONDS" ;;
     *) return 1 ;;
   esac
 }
@@ -995,7 +1011,7 @@ dayflow_codex_command() {
   local prompt_file="$6"
   local output_file="$7"
   local schema="$ROOT_DIR/scripts/schemas/dayflow-review.schema.json"
-  local common=(--json -m "$model" -c "model_reasoning_effort=\"$reasoning\"" -c 'approval_policy="never"' -c 'mcp_servers={}')
+  local common=(--json --ignore-user-config -m "$model" -c "model_reasoning_effort=\"$reasoning\"" -c 'approval_policy="never"' -c 'mcp_servers={}')
   local scrub=(env)
   local env_name
   while IFS='=' read -r env_name _; do
@@ -1007,7 +1023,7 @@ dayflow_codex_command() {
   done < <(env)
 
   case "$mode" in
-    primary-new)
+    primary-new|primary-fresh)
       "${scrub[@]}" \
         "$DAYFLOW_CODEX_BIN" exec "${common[@]}" -s "$DAYFLOW_DEFAULT_SANDBOX" -C "$worktree" -o "$output_file" - <"$prompt_file"
       ;;
@@ -1039,10 +1055,12 @@ dayflow_execute_bounded() {
   local prompt_file="$7"
   local log_file="$8"
   local output_file="$9"
-  local phase="${10:-}" phase_limit phase_billable_tokens aggregate_billable_tokens
+  local phase="${10:-}" phase_limit execution_limit_seconds phase_billable_tokens aggregate_billable_tokens
   local started_at now last_progress last_size=0 size elapsed invocation_billable_tokens pid rc=0 limit_reason=""
   local prompt_size invocation_usage input_tokens cached_input_tokens uncached_input_tokens output_tokens raw_total_tokens
   local restore_job_control=false
+
+  DAYFLOW_EXECUTION_LATE_TOKEN_LIMIT="false"
 
   prompt_size="$(wc -c <"$prompt_file" | tr -d ' ')"
   if (( prompt_size > DAYFLOW_PROMPT_LIMIT_BYTES )); then
@@ -1068,6 +1086,19 @@ dayflow_execute_bounded() {
     export DAYFLOW_EXECUTION_ERROR
     return 124
   }
+  execution_limit_seconds="$(dayflow_phase_execution_limit "$phase")" || {
+    DAYFLOW_EXECUTION_ERROR="unsupported execution phase: $phase"
+    export DAYFLOW_EXECUTION_ERROR
+    return 124
+  }
+  [[ "$execution_limit_seconds" =~ ^[0-9]+$ && "$execution_limit_seconds" -gt 0 ]] || {
+    DAYFLOW_EXECUTION_ERROR="invalid execution limit for phase $phase"
+    export DAYFLOW_EXECUTION_ERROR
+    return 124
+  }
+
+  # A retry must never validate an output artifact left by an earlier execution.
+  rm -f "$log_file" "$output_file"
 
   aggregate_billable_tokens="$(dayflow_state_billable_tokens "$issue_key")" || {
     DAYFLOW_EXECUTION_ERROR='billable token accounting is unavailable; refusing to launch'
@@ -1134,8 +1165,8 @@ dayflow_execute_bounded() {
       limit_reason="${phase} token limit exceeded (${phase_limit})"
     elif (( now - last_progress >= DAYFLOW_STALL_LIMIT_SECONDS )); then
       limit_reason="no progress for ${DAYFLOW_STALL_LIMIT_SECONDS}s"
-    elif (( elapsed >= DAYFLOW_EXECUTION_LIMIT_SECONDS )); then
-      limit_reason="execution limit exceeded (${DAYFLOW_EXECUTION_LIMIT_SECONDS}s)"
+    elif (( elapsed >= execution_limit_seconds )); then
+      limit_reason="execution limit exceeded (${execution_limit_seconds}s; phase=${phase})"
     fi
     if [[ -n "$limit_reason" ]]; then
       dayflow_stop_active_codex
@@ -1197,10 +1228,22 @@ dayflow_execute_bounded() {
 
   if [[ -z "$limit_reason" && "$rc" == "0" ]] && (( aggregate_billable_tokens >= DAYFLOW_TOKEN_LIMIT )); then
     limit_reason="token limit exceeded after process exit (${DAYFLOW_TOKEN_LIMIT})"
-    rc=124
+    if [[ "$mode" =~ ^primary-(new|fresh|resume)$ ]] \
+      && [[ -n "$(dayflow_jsonl_session_id "$log_file")" ]] \
+      && dayflow_validate_test_evidence "$output_file" >/dev/null 2>&1; then
+      DAYFLOW_EXECUTION_LATE_TOKEN_LIMIT="true"
+    else
+      rc=124
+    fi
   elif [[ -z "$limit_reason" && "$rc" == "0" ]] && (( phase_billable_tokens >= phase_limit )); then
     limit_reason="${phase} token limit exceeded after process exit (${phase_limit})"
-    rc=124
+    if [[ "$mode" =~ ^primary-(new|fresh|resume)$ ]] \
+      && [[ -n "$(dayflow_jsonl_session_id "$log_file")" ]] \
+      && dayflow_validate_test_evidence "$output_file" >/dev/null 2>&1; then
+      DAYFLOW_EXECUTION_LATE_TOKEN_LIMIT="true"
+    else
+      rc=124
+    fi
   fi
 
   if [[ -n "$limit_reason" ]]; then
@@ -1214,7 +1257,13 @@ dayflow_execute_bounded() {
   else
     DAYFLOW_EXECUTION_ERROR=""
   fi
+  if [[ "$DAYFLOW_EXECUTION_LATE_TOKEN_LIMIT" == "true" ]]; then
+    dayflow_state_update "$issue_key" --arg reason "$DAYFLOW_EXECUTION_ERROR" --arg phase "$phase" --arg at "$(dayflow_now_iso)" '
+      .late_token_limit = {reason: $reason, phase: $phase, reported_at: $at}
+      | .updated_at = $at'
+  fi
   export DAYFLOW_EXECUTION_ERROR
+  export DAYFLOW_EXECUTION_LATE_TOKEN_LIMIT
   return "$rc"
 }
 
@@ -1469,6 +1518,21 @@ dayflow_mark_running() {
      | del(.tokens_used)'
 }
 
+dayflow_record_fresh_session() {
+  local issue_key="$1"
+  local log_file="$2"
+  local session_id
+  session_id="$(dayflow_jsonl_session_id "$log_file")"
+  [[ -n "$session_id" ]] || {
+    dayflow_error 'Codex completed without a new session id.'
+    return 1
+  }
+  dayflow_state_update "$issue_key" --arg session "$session_id" --arg at "$(dayflow_now_iso)" '
+    .session_id = $session
+    | .session_history = (((.session_history // []) + [$session]) | unique | .[-8:])
+    | .updated_at = $at'
+}
+
 dayflow_mark_publication_unsafe() {
   local issue_key="$1"
   local reason="$2"
@@ -1533,7 +1597,10 @@ dayflow_publish_issue_changes() {
     git -C "$worktree" diff --check || { dayflow_mark_publication_unsafe "$issue_key" 'publication diff validation failed'; return; }
     git -C "$worktree" add -A || return 1
     git -C "$worktree" diff --cached --quiet && { dayflow_error 'no staged issue changes remain after deterministic staging'; return 1; }
-    git -C "$worktree" commit -m "$expected_subject" >/dev/null || return 1
+    git -C "$worktree" \
+      -c "user.name=$DAYFLOW_GIT_AUTHOR_NAME" \
+      -c "user.email=$DAYFLOW_GIT_AUTHOR_EMAIL" \
+      commit -m "$expected_subject" >/dev/null || return 1
   elif [[ "$phase" == "edited" ]]; then
     [[ "$(git -C "$worktree" log -1 --format=%s)" == "$expected_subject" ]] || {
       dayflow_mark_publication_unsafe "$issue_key" 'clean publication recovery does not match the deterministic commit'
@@ -1892,7 +1959,7 @@ dayflow_reconcile_one() {
 
 dayflow_run_issue() {
   local issue_key="$1"
-  local issue_json issue_id title description linear_state primary model_route model reasoning branch base_branch worktree session_id mode
+  local issue_json issue_id title description linear_state primary model_route model reasoning branch base_branch worktree session_id mode execution_phase=""
   local timestamp prompt_file log_file output_file pr_json pr_number review_prompt review_log review_output
   local review_round=1 findings_comment remediation_prompt remediation_log remediation_output repo
   local pre_session_recovery=false publication_recovery=false requested_changes_recovery=false token_accounting_recovery=false recovery_status=""
@@ -1984,9 +2051,10 @@ dayflow_run_issue() {
       "$DAYFLOW_STATE_TODO_NAME"|"$DAYFLOW_STATE_IN_PROGRESS_NAME"|"$DAYFLOW_STATE_IN_REVIEW_NAME") ;;
       *) dayflow_error "requested-changes recovery is not runnable from issue state: $linear_state"; return 1 ;;
     esac
-    worktree="$(dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" false "$base_branch")" || return 1
-    session_id="$(dayflow_state_value "$issue_key" '.session_id')"
-    mode="primary-resume"
+    worktree="$(dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" true "$base_branch")" || return 1
+    session_id=""
+    mode="primary-fresh"
+    execution_phase="remediation"
   elif dayflow_is_pre_session_recovery "$issue_key"; then
     case "$linear_state" in
       "$DAYFLOW_STATE_TODO_NAME"|"$DAYFLOW_STATE_BLOCKED_NAME"|"$DAYFLOW_STATE_IN_PROGRESS_NAME") ;;
@@ -2004,8 +2072,8 @@ dayflow_run_issue() {
         ;;
       "$DAYFLOW_STATE_IN_PROGRESS_NAME"|"$DAYFLOW_STATE_IN_REVIEW_NAME")
         worktree="$(dayflow_validate_resume_state "$issue_key" "$branch" "$primary" "$model" "$reasoning" false "$base_branch")" || return 1
-        session_id="$(dayflow_state_value "$issue_key" '.session_id')"
-        mode="primary-resume"
+        session_id=""
+        mode="primary-fresh"
         ;;
       *)
         dayflow_error "issue state is not runnable: $linear_state"
@@ -2053,30 +2121,29 @@ dayflow_run_issue() {
   if [[ "$publication_recovery" != "true" && "$token_accounting_recovery" != "true" ]]; then
     if [[ "$requested_changes_recovery" == "true" ]]; then
       {
-        printf 'Address only the current GitHub requested changes below in the existing session. Make a concrete issue-scoped worktree change, run focused tests, and return the required structured test-evidence JSON. Do not stage, commit, push, use gh, or change lifecycle state.\n\n'
+        printf 'Address only the current GitHub requested changes below in a fresh, bounded session. Make a concrete issue-scoped worktree change, run focused tests, and return the required structured test-evidence JSON. Do not stage, commit, push, use gh, or change lifecycle state.\n\n'
         jq '.requested_changes' "$(dayflow_state_file "$issue_key")"
       } >"$prompt_file"
     else
       dayflow_issue_prompt "$issue_json" "$primary" >"$prompt_file"
     fi
-    if ! dayflow_execute_bounded "$issue_key" "$mode" "$worktree" "$model" "$reasoning" "$session_id" "$prompt_file" "$log_file" "$output_file"; then
+    if ! dayflow_execute_bounded "$issue_key" "$mode" "$worktree" "$model" "$reasoning" "$session_id" "$prompt_file" "$log_file" "$output_file" "$execution_phase"; then
       dayflow_block_issue "$issue_json" "$DAYFLOW_EXECUTION_ERROR"
       return 1
     fi
-    if [[ "$mode" == "primary-new" ]]; then
-      session_id="$(dayflow_jsonl_session_id "$log_file")"
-      [[ -n "$session_id" ]] || {
-        dayflow_block_issue "$issue_json" 'Codex completed without a resumable session id.'
+    if [[ "$mode" == "primary-new" || "$mode" == "primary-fresh" ]]; then
+      if ! dayflow_record_fresh_session "$issue_key" "$log_file"; then
+        dayflow_block_issue "$issue_json" 'Codex completed without a new session id.'
         return 1
-      }
-      dayflow_state_update "$issue_key" --arg session "$session_id" '.session_id = $session'
+      fi
+      session_id="$(dayflow_state_value "$issue_key" '.session_id')"
     fi
     if [[ "$requested_changes_recovery" == "true" && -z "$(git -C "$worktree" status --porcelain --untracked-files=normal)" ]]; then
       dayflow_block_issue "$issue_json" 'Requested-changes remediation produced no worktree change.'
       return 1
     fi
-    if ! dayflow_store_test_evidence "$issue_key" "$output_file" "$([[ "$requested_changes_recovery" == "true" ]] && printf 'Current GitHub requested changes were addressed in the persisted primary session.' || printf 'Not applicable before automated review.')"; then
-      dayflow_block_issue "$issue_json" 'Primary session returned missing, malformed, or failed test evidence.'
+    if ! dayflow_store_test_evidence "$issue_key" "$output_file" "$([[ "$requested_changes_recovery" == "true" ]] && printf 'Current GitHub requested changes were addressed in a fresh bounded primary execution.' || printf 'Not applicable before automated review.')"; then
+      dayflow_block_issue "$issue_json" 'Primary execution returned missing, malformed, or failed test evidence.'
       return 1
     fi
   fi
@@ -2134,8 +2201,12 @@ dayflow_run_issue() {
       printf 'Address only the P0-P2 review findings below, then re-run focused tests. Edit/test only: do not stage, commit, push, use gh, update proof, or change lifecycle state. Do not dump whole files, logs, trees, or repository diffs. The deterministic runner owns publication.\n\n'
       jq '.' "$review_output"
     } >"$remediation_prompt"
-    if ! dayflow_execute_bounded "$issue_key" primary-resume "$worktree" "$model" "$reasoning" "$session_id" "$remediation_prompt" "$remediation_log" "$remediation_output" remediation; then
+    if ! dayflow_execute_bounded "$issue_key" primary-fresh "$worktree" "$model" "$reasoning" "" "$remediation_prompt" "$remediation_log" "$remediation_output" remediation; then
       dayflow_block_issue "$issue_json" "$DAYFLOW_EXECUTION_ERROR"
+      return 1
+    fi
+    if ! dayflow_record_fresh_session "$issue_key" "$remediation_log"; then
+      dayflow_block_issue "$issue_json" 'Codex remediation completed without a new session id.'
       return 1
     fi
     if ! dayflow_store_test_evidence "$issue_key" "$remediation_output" 'Automated P0-P2 findings were addressed in one bounded remediation session.'; then
