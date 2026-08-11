@@ -663,7 +663,8 @@ dayflow_validate_publication_capability() {
     dayflow_error "GitHub token does not have push permission for $repo"
     return 1
   }
-  dayflow_git_publish "$worktree" push --dry-run origin "HEAD:refs/heads/$branch" >/dev/null 2>&1 || {
+  # Verify Git transport without invoking remote receive hooks before we have a commit to recover.
+  dayflow_git_publish "$worktree" ls-remote --heads origin >/dev/null 2>&1 || {
     dayflow_error 'Git transport publication preflight failed'
     return 1
   }
