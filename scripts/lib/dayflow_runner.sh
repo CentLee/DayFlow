@@ -1959,7 +1959,7 @@ dayflow_reconcile_one() {
 
 dayflow_run_issue() {
   local issue_key="$1"
-  local issue_json issue_id title description linear_state primary model_route model reasoning branch base_branch worktree session_id mode execution_phase
+  local issue_json issue_id title description linear_state primary model_route model reasoning branch base_branch worktree session_id mode execution_phase=""
   local timestamp prompt_file log_file output_file pr_json pr_number review_prompt review_log review_output
   local review_round=1 findings_comment remediation_prompt remediation_log remediation_output repo
   local pre_session_recovery=false publication_recovery=false requested_changes_recovery=false token_accounting_recovery=false recovery_status=""
