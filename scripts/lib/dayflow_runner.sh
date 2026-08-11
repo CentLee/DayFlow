@@ -31,6 +31,8 @@ DAYFLOW_CODEX_BIN="${DAYFLOW_CODEX_BIN:-codex}"
 DAYFLOW_GH_BIN="${DAYFLOW_GH_BIN:-gh}"
 DAYFLOW_CURL_BIN="${DAYFLOW_CURL_BIN:-curl}"
 DAYFLOW_PERL_BIN="${DAYFLOW_PERL_BIN:-perl}"
+DAYFLOW_GIT_AUTHOR_NAME="${DAYFLOW_GIT_AUTHOR_NAME:-DayFlow Runner}"
+DAYFLOW_GIT_AUTHOR_EMAIL="${DAYFLOW_GIT_AUTHOR_EMAIL:-dayflow-runner@users.noreply.github.com}"
 DAYFLOW_EXECUTION_LIMIT_SECONDS="${DAYFLOW_EXECUTION_LIMIT_SECONDS:-}"
 DAYFLOW_PRIMARY_EXECUTION_LIMIT_SECONDS="${DAYFLOW_PRIMARY_EXECUTION_LIMIT_SECONDS:-${DAYFLOW_EXECUTION_LIMIT_SECONDS:-120}}"
 DAYFLOW_REVIEW_EXECUTION_LIMIT_SECONDS="${DAYFLOW_REVIEW_EXECUTION_LIMIT_SECONDS:-${DAYFLOW_EXECUTION_LIMIT_SECONDS:-90}}"
@@ -1594,7 +1596,10 @@ dayflow_publish_issue_changes() {
     git -C "$worktree" diff --check || { dayflow_mark_publication_unsafe "$issue_key" 'publication diff validation failed'; return; }
     git -C "$worktree" add -A || return 1
     git -C "$worktree" diff --cached --quiet && { dayflow_error 'no staged issue changes remain after deterministic staging'; return 1; }
-    git -C "$worktree" commit -m "$expected_subject" >/dev/null || return 1
+    git -C "$worktree" \
+      -c "user.name=$DAYFLOW_GIT_AUTHOR_NAME" \
+      -c "user.email=$DAYFLOW_GIT_AUTHOR_EMAIL" \
+      commit -m "$expected_subject" >/dev/null || return 1
   elif [[ "$phase" == "edited" ]]; then
     [[ "$(git -C "$worktree" log -1 --format=%s)" == "$expected_subject" ]] || {
       dayflow_mark_publication_unsafe "$issue_key" 'clean publication recovery does not match the deterministic commit'

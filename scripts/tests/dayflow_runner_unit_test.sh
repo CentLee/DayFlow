@@ -25,6 +25,8 @@ assert_eq '400000' "$DAYFLOW_TOKEN_LIMIT" 'default aggregate billable token limi
 assert_eq '220000' "$DAYFLOW_PRIMARY_TOKEN_LIMIT" 'default primary billable token limit'
 assert_eq '100000' "$DAYFLOW_REVIEW_TOKEN_LIMIT" 'default review billable token limit'
 assert_eq '180000' "$DAYFLOW_REMEDIATION_TOKEN_LIMIT" 'default remediation billable token limit'
+assert_eq 'DayFlow Runner' "$DAYFLOW_GIT_AUTHOR_NAME" 'default deterministic Git author name'
+assert_eq 'dayflow-runner@users.noreply.github.com' "$DAYFLOW_GIT_AUTHOR_EMAIL" 'default deterministic Git author email'
 assert_eq '120' "$DAYFLOW_PRIMARY_EXECUTION_LIMIT_SECONDS" 'default primary execution slice'
 assert_eq '90' "$DAYFLOW_REVIEW_EXECUTION_LIMIT_SECONDS" 'default review execution slice'
 assert_eq '90' "$DAYFLOW_REMEDIATION_EXECUTION_LIMIT_SECONDS" 'default remediation execution slice'
