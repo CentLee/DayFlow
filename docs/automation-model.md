@@ -64,7 +64,7 @@ Delivery requires:
 - branch pushed to origin
 - open PR targeting the declared base
 - all proof headings populated
-- no P0-P2 finding after at most one same-session remediation
+- no P0-P2 finding after at most one same-owner fresh-session remediation
 - validated structured evidence for 1-8 passed tests
 
 Codex subprocesses receive no Linear, GitHub, or Discord credential variables. Publication is a persisted `edited -> committed -> pushed -> pr-created` state machine; retries reconcile local HEAD, remote HEAD, and PR head/base/proof before continuing without re-running the primary model.
@@ -73,7 +73,7 @@ Codex subprocesses receive no Linear, GitHub, or Discord credential variables. P
 
 `product-agent`, `integration-agent`, and `review-agent` use `gpt-5.6-terra/high`. `backend-agent` and `ios-agent` use `gpt-5.6-terra/medium`. There is no fallback.
 
-The default execution sandbox is `workspace-write`, approval policy is `never`, and review is read-only. The aggregate issue token limit is 400K **billable tokens**: uncached input plus output. The runner also tracks cumulative phase budgets: primary 220K, review 100K, and remediation 180K. These phase limits prevent any one lifecycle phase from consuming the entire issue allowance; the 400K aggregate remains the absolute cap. Cached input does not consume either cap, but raw input, cached input, uncached input, output, raw totals, aggregate billable totals, and phase billable totals remain persisted for diagnostics. Admission, live monitoring, persistence, and post-exit guards all use billable totals. Prompt, command-output, no-progress, and wall-clock bounds are enforced by the runner. Supervisor dispatch inherits these per-issue limits and does not create a separate token budget. Breaches terminate the child process, preserve state, and block the issue.
+The default execution sandbox is `workspace-write`, approval policy is `never`, and review is read-only. Codex subprocesses use `--ignore-user-config`, so personal MCP servers and configuration cannot add tools, context, or background initialization to issue execution. The aggregate issue token limit is 400K **billable tokens**: uncached input plus output. The runner records cumulative phase budgets of primary 220K, review 100K, and remediation 180K, but Codex may report usage only at process completion; these values are admission and diagnostic guards, not a promise of preemptive spend control. When an otherwise successful execution reports a token overage only after exit, the runner records `late_token_limit`, preserves validated test evidence, and continues deterministic publication; the next model stage is rejected at admission. The hard preemptive guard is a phase execution slice: primary 120 seconds, review 90 seconds, and remediation 90 seconds. A slice breach terminates the process, preserves the worktree, and blocks the issue before publication or another model step. Review and requested-changes remediation always start a fresh Primary Agent session with only the current findings, rather than rehydrating an unbounded transcript. Cached input does not consume either token cap, but raw input, cached input, uncached input, output, raw totals, aggregate billable totals, and phase billable totals remain persisted for diagnostics. Prompt, command-output, no-progress, and wall-clock bounds are enforced by the runner. Supervisor dispatch inherits these per-issue limits and does not create a separate token budget.
 
 ## Reconciliation
 

@@ -86,7 +86,7 @@ run_review_remediation_test() {
   "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
   assert_eq 'merge-ready' "$(jq -r '.status' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'remediation path status'
   assert_eq '2' "$(<"$FAKE_CODEX_REVIEW_COUNT_FILE")" 'review rerun count'
-  assert_file_contains "$FAKE_CODEX_LOG" 'resume' 'same primary session was resumed'
+  assert_failure 'review remediation does not resume an unbounded session history' rg -q 'resume' "$FAKE_CODEX_LOG"
   assert_file_contains "$FAKE_GH_LOG" 'ready.*--undo' 'blocking review returned PR to draft'
   assert_file_contains "$FAKE_GH_COMMENTS_LOG" 'Proof needs refresh' 'blocking review was published'
   assert_file_contains "$FAKE_GH_COMMENTS_LOG" 'Outcome:.*passed' 'clean rereview was published'
@@ -98,6 +98,7 @@ run_review_remediation_test() {
   assert_file_contains "$FAKE_GH_LOG" "GH_CONFIG_DIR=$DAYFLOW_RUNTIME_DIR/gh :: auth status" 'canonical GitHub auth reaches issue worktree publication'
   assert_file_contains "$FAKE_GH_LOG" 'api -X PATCH repos/test/dayflow/pulls/' 'runner owns PR proof publication'
   assert_file_contains "$FAKE_CODEX_LOG" 'mcp_servers=\{\}' 'irrelevant MCP startup disabled'
+  assert_file_contains "$FAKE_CODEX_LOG" -- '--ignore-user-config' 'runner ignores user MCP configuration'
   assert_failure 'model never receives danger-full-access' rg -q 'danger-full-access' "$FAKE_CODEX_LOG"
   rm -rf "$test_root"
 }
@@ -453,7 +454,7 @@ run_requested_changes_auto_resume_test() {
   export FAKE_CODEX_PROMPT_LOG="$test_root/requested.prompt"
   "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
   assert_file_contains "$FAKE_CODEX_PROMPT_LOG" 'Change the focused fixture behavior' 'auto-resume prompt includes current requested feedback'
-  assert_file_contains "$FAKE_CODEX_LOG" 'resume.*fake-primary-session' 'requested changes reuse the primary session'
+  assert_failure 'requested changes do not restore an unbounded session history' rg -q 'resume.*fake-primary-session' "$FAKE_CODEX_LOG"
   assert_eq '2' "$(<"$FAKE_CODEX_PRIMARY_COUNT_FILE")" 'requested changes invoke one remediation primary turn'
   worktree="$(jq -r '.worktree' "$state_file")"
   commits="$(git -C "$worktree" rev-list --count origin/develop..HEAD)"
@@ -553,7 +554,7 @@ run_owned_recovery_gate_case() {
   assert_eq "$expected_primary_count" "$(<"$FAKE_CODEX_PRIMARY_COUNT_FILE")" "$recovery_mode $failure_gate later retry creates no new primary session"
   assert_eq 'merge-ready' "$(jq -r '.status' "$state_file")" "$recovery_mode $failure_gate later retry completes"
   if [[ "$recovery_mode" == "review-changes" ]]; then
-    assert_file_contains "$FAKE_CODEX_LOG" 'resume.*fake-primary-session' "$recovery_mode $failure_gate uses same-session resume"
+    assert_failure "$recovery_mode $failure_gate uses a fresh bounded session" rg -q 'resume.*fake-primary-session' "$FAKE_CODEX_LOG"
   fi
   rm -rf "$test_root"
 }

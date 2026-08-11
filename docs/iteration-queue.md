@@ -89,7 +89,7 @@ CEN-35's retained implementation was falsely blocked when cached input was count
   - `scripts/lib/dayflow_runner.sh`
   - CEN-35 false-block state and retained primary logs
 - Done When:
-  - `DAYFLOW_TOKEN_LIMIT` consistently applies only uncached input plus output at admission, live-monitor, persistence, and post-exit boundaries
+  - `DAYFLOW_TOKEN_LIMIT` records uncached input plus output at admission, live-monitor when usage is emitted, persistence, and post-exit boundaries; phase execution slices provide the preemptive stop when usage is delayed
   - cached input and raw totals remain persisted independently for diagnostics
   - focused tests cover a large cached under-cap invocation, truly billable live/post-exit over-cap behavior, and deterministic CEN-35-style recovery without primary replay
   - local runner and automation documentation describe the billable definition and safe retained-output reconciliation

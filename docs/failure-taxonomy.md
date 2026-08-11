@@ -18,7 +18,7 @@ The configured model is unavailable, rejected, or inaccessible. No fallback is a
 
 ### F4. Resource Limit
 
-Aggregate billable tokens (uncached input plus output) reach 400K, or cumulative primary, review, or remediation billable usage reaches its respective 220K, 100K, or 180K phase ceiling. Output making no progress for five minutes or an invocation reaching 20 minutes also stops execution. Cached input remains observable but does not consume a cap. The Codex child is terminated and the issue is blocked with local evidence. A historical cached-context false block may be reconciled only from consistent persisted usage plus one retained primary log/output pair and valid evidence; that path preserves the owned worktree and never replays the primary model.
+The preemptive limit is a 120-second primary, 90-second review, or 90-second remediation execution slice; output making no progress for five minutes also stops execution. Aggregate billable tokens (uncached input plus output) reaching 400K, or cumulative primary, review, or remediation billable usage reaching its respective 220K, 100K, or 180K ceiling, is fail-closed accounting. Codex may emit that usage only after exit, so token accounting is retained for admission and diagnostics but cannot promise a preemptive spend stop. A completed execution with a valid final result and a late token report is recorded as `late_token_limit` and may be published deterministically, but no later model stage is admitted. Cached input remains observable but does not consume a cap. The Codex child is terminated on preemptive limits and the issue is blocked with local evidence. A historical cached-context false block may be reconciled only from consistent persisted usage plus one retained primary log/output pair and valid evidence; that path preserves the owned worktree and never replays the primary model.
 
 ### F5. Delivery Failure
 
@@ -26,7 +26,7 @@ The Primary Agent completes without valid passed-test evidence, the correct bran
 
 ### F6. Review Failure
 
-P0-P2 findings trigger one same-session remediation. Remaining blockers after rereview stop the run. P3 findings and residual risks remain visible but do not automatically block.
+P0-P2 findings trigger one fresh bounded remediation by the same Primary Agent owner. Remaining blockers after rereview stop the run. P3 findings and residual risks remain visible but do not automatically block.
 
 ### F7. Reconciliation Failure
 

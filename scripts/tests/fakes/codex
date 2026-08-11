@@ -110,6 +110,12 @@ case "${FAKE_CODEX_MODE:-success}" in
     printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":120000,"cached_input_tokens":0,"output_tokens":1}}'
     exit 0
     ;;
+  billable-post-exit-valid-over-cap)
+    printf '%s\n' '{"type":"thread.started","thread_id":"fake-billable-post-exit-valid-session"}'
+    printf '%s\n' '{"summary":"completed before final token accounting","tests":[{"name":"focused fixture","status":"passed"}]}' >"$output_file"
+    printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":120000,"cached_input_tokens":0,"output_tokens":1}}'
+    exit 0
+    ;;
   output-limit)
     while true; do
       printf '%01024d\n' 0
@@ -155,6 +161,10 @@ fi
 if [[ "$is_resume" == "true" ]]; then
   if [[ "${FAKE_CODEX_NO_CHANGE:-false}" != "true" ]]; then
     printf '%s\n' "remediated" >>"$worktree/runner-result.txt"
+  fi
+elif [[ -f "$worktree/runner-result.txt" ]]; then
+  if [[ "${FAKE_CODEX_NO_CHANGE:-false}" != "true" ]]; then
+    printf '%s\n' "implemented-fresh" >>"$worktree/runner-result.txt"
   fi
 else
   printf '%s\n' "implemented" >"$worktree/runner-result.txt"

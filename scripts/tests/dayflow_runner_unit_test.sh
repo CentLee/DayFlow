@@ -25,6 +25,9 @@ assert_eq '400000' "$DAYFLOW_TOKEN_LIMIT" 'default aggregate billable token limi
 assert_eq '220000' "$DAYFLOW_PRIMARY_TOKEN_LIMIT" 'default primary billable token limit'
 assert_eq '100000' "$DAYFLOW_REVIEW_TOKEN_LIMIT" 'default review billable token limit'
 assert_eq '180000' "$DAYFLOW_REMEDIATION_TOKEN_LIMIT" 'default remediation billable token limit'
+assert_eq '120' "$DAYFLOW_PRIMARY_EXECUTION_LIMIT_SECONDS" 'default primary execution slice'
+assert_eq '90' "$DAYFLOW_REVIEW_EXECUTION_LIMIT_SECONDS" 'default review execution slice'
+assert_eq '90' "$DAYFLOW_REMEDIATION_EXECUTION_LIMIT_SECONDS" 'default remediation execution slice'
 
 mkdir -p "$DAYFLOW_LEGACY_RUNTIME_DIR/gh" "$DAYFLOW_LEGACY_RUNTIME_DIR/artifacts"
 printf '%s\n' 'legacy-auth' >"$DAYFLOW_LEGACY_RUNTIME_DIR/gh/hosts.yml"
@@ -222,6 +225,7 @@ assert_success 'matching resume ownership' dayflow_validate_resume_state CEN-40 
 assert_failure 'resume ownership drift must fail' dayflow_validate_resume_state CEN-40 "$current_branch" backend-agent gpt-5.6-terra medium
 printf '%s\n' dirty >>"$resume_repo/README.md"
 assert_failure 'dirty resume worktree fails closed' dayflow_validate_resume_state CEN-40 "$current_branch" integration-agent gpt-5.6-terra high
+assert_success 'owned review recovery permits preserved changes' dayflow_validate_resume_state CEN-40 "$current_branch" integration-agent gpt-5.6-terra high true
 mkdir "$DAYFLOW_STATE_ROOT/CEN-29.lock"
 printf '%s\n' '999999' >"$DAYFLOW_STATE_ROOT/CEN-29.lock/pid"
 assert_success 'stale lock recovery' dayflow_acquire_lock CEN-29
@@ -238,6 +242,7 @@ export FAKE_CODEX_MODE=token-limit
 DAYFLOW_TOKEN_LIMIT=10
 DAYFLOW_STALL_LIMIT_SECONDS=10
 DAYFLOW_EXECUTION_LIMIT_SECONDS=10
+DAYFLOW_PRIMARY_EXECUTION_LIMIT_SECONDS=10
 DAYFLOW_MONITOR_INTERVAL_SECONDS=0.1
 if dayflow_execute_bounded CEN-29 primary-new "$execution_worktree" fake-model medium '' "$prompt" "$TEST_TMP/token.jsonl" "$output"; then
   test_fail 'token limit execution should fail'
@@ -319,10 +324,20 @@ assert_eq '139000' "$(jq -r '.billable_tokens' "$DAYFLOW_STATE_ROOT/CEN-39.json"
 printf '%s\n' '{"billable_tokens":0}' >"$DAYFLOW_STATE_ROOT/CEN-41.json"
 export FAKE_CODEX_MODE=billable-post-exit-over-cap
 if dayflow_execute_bounded CEN-41 primary-new "$execution_worktree" fake-model medium '' "$prompt" "$TEST_TMP/billable-post-exit-over-cap.jsonl" "$output"; then
-  test_fail 'post-exit billable over-cap usage should fail'
+  test_fail 'post-exit billable report without valid evidence should fail'
 fi
-assert_eq 'token limit exceeded after process exit (120000)' "$DAYFLOW_EXECUTION_ERROR" 'post-exit cap uses billable usage'
+assert_eq 'token limit exceeded after process exit (120000)' "$DAYFLOW_EXECUTION_ERROR" 'post-exit cap records billable usage'
+assert_eq 'false' "$DAYFLOW_EXECUTION_LATE_TOKEN_LIMIT" 'post-exit cap without evidence is not recoverable'
 assert_eq '120001' "$(jq -r '.billable_tokens' "$DAYFLOW_STATE_ROOT/CEN-41.json")" 'post-exit over-cap persists billable usage'
+
+printf '%s\n' '{"billable_tokens":0}' >"$DAYFLOW_STATE_ROOT/CEN-44.json"
+export FAKE_CODEX_MODE=billable-post-exit-valid-over-cap
+if ! dayflow_execute_bounded CEN-44 primary-new "$execution_worktree" fake-model medium '' "$prompt" "$TEST_TMP/billable-post-exit-valid-over-cap.jsonl" "$output"; then
+  test_fail 'post-exit billable report with valid evidence should preserve a completed execution result'
+fi
+assert_eq 'token limit exceeded after process exit (120000)' "$DAYFLOW_EXECUTION_ERROR" 'recoverable post-exit cap records billable usage'
+assert_eq 'true' "$DAYFLOW_EXECUTION_LATE_TOKEN_LIMIT" 'recoverable post-exit cap is marked for deterministic recovery'
+assert_eq 'primary' "$(jq -r '.late_token_limit.phase' "$DAYFLOW_STATE_ROOT/CEN-44.json")" 'recoverable post-exit cap records phase'
 
 printf '%s\n' '{"billable_tokens":0}' >"$DAYFLOW_STATE_ROOT/CEN-36.json"
 oversized_prompt="$TEST_TMP/oversized-prompt"
@@ -359,10 +374,11 @@ printf '%s\n' '{"billable_tokens":0}' >"$DAYFLOW_STATE_ROOT/CEN-31.json"
 export FAKE_CODEX_MODE=execution-limit
 DAYFLOW_STALL_LIMIT_SECONDS=10
 DAYFLOW_EXECUTION_LIMIT_SECONDS=1
+DAYFLOW_PRIMARY_EXECUTION_LIMIT_SECONDS=1
 if dayflow_execute_bounded CEN-31 primary-new "$execution_worktree" fake-model medium '' "$prompt" "$TEST_TMP/execution.jsonl" "$output"; then
   test_fail 'execution limit should fail'
 fi
-assert_eq 'execution limit exceeded (1s)' "$DAYFLOW_EXECUTION_ERROR" 'execution limit reason'
+assert_eq 'execution limit exceeded (1s; phase=primary)' "$DAYFLOW_EXECUTION_ERROR" 'execution limit reason'
 
 printf '%s\n' '{"billable_tokens":0}' >"$DAYFLOW_STATE_ROOT/CEN-34.json"
 export FAKE_CODEX_MODE=spawn-child
@@ -371,6 +387,7 @@ export FAKE_CODEX_CHILD_PID_FILE="$TEST_TMP/codex-child.pid"
 DAYFLOW_TOKEN_LIMIT=1000
 DAYFLOW_STALL_LIMIT_SECONDS=30
 DAYFLOW_EXECUTION_LIMIT_SECONDS=30
+DAYFLOW_PRIMARY_EXECUTION_LIMIT_SECONDS=30
 (
   dayflow_acquire_lock CEN-34
   dayflow_install_cleanup_traps
