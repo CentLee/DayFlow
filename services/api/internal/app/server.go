@@ -112,20 +112,22 @@ func newRepository(cfg Config) (store.Repository, func() error, error) {
 		}
 	}
 	postgresStore := store.NewPostgresStore(db)
-	if mode == StoreModePostgres && (cfg.SeedMode == SeedModeDemo || cfg.SeedMode == SeedModeTest) {
-		if err := postgresStore.EnsureDemoSeed(ctx); err != nil {
-			_ = db.Close()
-			return nil, nil, fmt.Errorf("seed postgres runtime fixtures: %w", err)
+	if mode == StoreModePostgres {
+		if cfg.SeedMode == SeedModeDemo || cfg.SeedMode == SeedModeTest {
+			if err := postgresStore.EnsureDemoSeed(ctx); err != nil {
+				_ = db.Close()
+				return nil, nil, fmt.Errorf("seed postgres runtime fixtures: %w", err)
+			}
 		}
-	}
-	topology, err := topologyFromEnv()
-	if err != nil {
-		_ = db.Close()
-		return nil, nil, fmt.Errorf("deployment readiness: %w", err)
-	}
-	if err := applyTwoPersonTopology(ctx, db, topology); err != nil {
-		_ = db.Close()
-		return nil, nil, fmt.Errorf("deployment readiness: %w", err)
+		topology, err := topologyFromEnv()
+		if err != nil {
+			_ = db.Close()
+			return nil, nil, fmt.Errorf("deployment readiness: %w", err)
+		}
+		if err := applyTwoPersonTopology(ctx, db, topology); err != nil {
+			_ = db.Close()
+			return nil, nil, fmt.Errorf("deployment readiness: %w", err)
+		}
 	}
 
 	if mode == StoreModeHybrid {
