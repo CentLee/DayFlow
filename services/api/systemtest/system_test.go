@@ -26,126 +26,51 @@ func TestSystemHealth(t *testing.T) {
 	}
 }
 
-func TestSystemInviteFlow(t *testing.T) {
+func TestSystemHouseholdTopology(t *testing.T) {
 	client, baseURL := systemClient(t)
 
 	ownerToken := loginToken(t, client, baseURL, "owner@dayflow.local", "secret1234")
+	partnerToken := loginToken(t, client, baseURL, "editor@dayflow.local", "secret1234")
 	outsiderToken := loginToken(t, client, baseURL, "outside@dayflow.local", "secret1234")
 
-	createInviteResp := authedJSONRequest(t, client, ownerToken, http.MethodPost, baseURL+"/v1/calendars/cal_002/invites", map[string]any{
+	for _, token := range []string{ownerToken, partnerToken} {
+		calendarsResp := authedJSONRequest(t, client, token, http.MethodGet, baseURL+"/v1/calendars", nil)
+		if calendarsResp.StatusCode != http.StatusOK {
+			calendarsResp.Body.Close()
+			t.Fatalf("list household calendars: expected 200, got %d", calendarsResp.StatusCode)
+		}
+		var payload struct {
+			Items []struct {
+				ID   string `json:"id"`
+				Kind string `json:"kind"`
+			} `json:"items"`
+		}
+		decodeResponse(t, calendarsResp, &payload)
+		if len(payload.Items) != 1 || payload.Items[0].ID != "cal_002" || payload.Items[0].Kind != "household" {
+			t.Fatalf("expected one household calendar, got %#v", payload.Items)
+		}
+	}
+
+	partnerEventsResp := authedJSONRequest(t, client, partnerToken, http.MethodGet, baseURL+"/v1/calendars/cal_002/events", nil)
+	defer partnerEventsResp.Body.Close()
+	if partnerEventsResp.StatusCode != http.StatusOK {
+		t.Fatalf("partner household events: expected 200, got %d", partnerEventsResp.StatusCode)
+	}
+
+	outsiderEventsResp := authedJSONRequest(t, client, outsiderToken, http.MethodGet, baseURL+"/v1/calendars/cal_002/events", nil)
+	defer outsiderEventsResp.Body.Close()
+	if outsiderEventsResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("outsider household events: expected 403, got %d", outsiderEventsResp.StatusCode)
+	}
+
+	inviteResp := authedJSONRequest(t, client, ownerToken, http.MethodPost, baseURL+"/v1/calendars/cal_002/invites", map[string]any{
 		"email":            "guest-system@dayflow.local",
 		"delivery_channel": "sms",
 		"role":             "editor",
 	})
-	if createInviteResp.StatusCode != http.StatusCreated {
-		t.Fatalf("expected 201, got %d", createInviteResp.StatusCode)
-	}
-
-	var invite struct {
-		InviteCode string `json:"invite_code"`
-	}
-	decodeResponse(t, createInviteResp, &invite)
-	if invite.InviteCode == "" {
-		t.Fatal("expected invite code")
-	}
-
-	previewResp := mustRequest(t, client, http.MethodGet, baseURL+"/v1/invites/"+invite.InviteCode, "", nil)
-	defer previewResp.Body.Close()
-	if previewResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", previewResp.StatusCode)
-	}
-
-	acceptResp := authedJSONRequest(t, client, outsiderToken, http.MethodPost, baseURL+"/v1/invites/"+invite.InviteCode+"/accept", nil)
-	defer acceptResp.Body.Close()
-	if acceptResp.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403 for mismatched invite target, got %d", acceptResp.StatusCode)
-	}
-}
-
-func TestSystemInviteRegistrationCompletesAtomically(t *testing.T) {
-	client, baseURL := systemClient(t)
-	ownerToken := loginToken(t, client, baseURL, "owner@dayflow.local", "secret1234")
-	email := fmt.Sprintf("registration-%d@dayflow.local", time.Now().UnixNano())
-
-	createInviteResp := authedJSONRequest(t, client, ownerToken, http.MethodPost, baseURL+"/v1/calendars/cal_002/invites", map[string]any{
-		"email":            email,
-		"delivery_channel": "email",
-		"role":             "viewer",
-	})
-	if createInviteResp.StatusCode != http.StatusCreated {
-		createInviteResp.Body.Close()
-		t.Fatalf("create invite: expected 201, got %d", createInviteResp.StatusCode)
-	}
-	var invite struct {
-		InviteCode string `json:"invite_code"`
-	}
-	decodeResponse(t, createInviteResp, &invite)
-
-	failedRegistrationResp := mustRequest(t, client, http.MethodPost, baseURL+"/v1/auth/register", "", map[string]any{
-		"email":        "other-" + email,
-		"display_name": "Wrong Recipient",
-		"password":     "secret1234",
-		"invite_code":  invite.InviteCode,
-	})
-	defer failedRegistrationResp.Body.Close()
-	if failedRegistrationResp.StatusCode != http.StatusForbidden {
-		t.Fatalf("mismatched registration: expected 403, got %d", failedRegistrationResp.StatusCode)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	registrationResp := requestWithContext(t, client, ctx, http.MethodPost, baseURL+"/v1/auth/register", "", map[string]any{
-		"email":        email,
-		"display_name": "Postgres Invitee",
-		"password":     "secret1234",
-		"invite_code":  invite.InviteCode,
-	})
-	if registrationResp.StatusCode != http.StatusCreated {
-		registrationResp.Body.Close()
-		t.Fatalf("registration: expected 201 before deadline, got %d", registrationResp.StatusCode)
-	}
-	var registration struct {
-		User struct {
-			ID string `json:"id"`
-		} `json:"user"`
-		Token string `json:"token"`
-	}
-	decodeResponse(t, registrationResp, &registration)
-	if registration.User.ID == "" || registration.Token == "" {
-		t.Fatalf("expected registered user and session token, got %#v", registration)
-	}
-
-	meResp := authedJSONRequest(t, client, registration.Token, http.MethodGet, baseURL+"/v1/me", nil)
-	if meResp.StatusCode != http.StatusOK {
-		meResp.Body.Close()
-		t.Fatalf("authenticated session: expected 200, got %d", meResp.StatusCode)
-	}
-	var me struct {
-		PersonalCalendar struct {
-			Kind string `json:"kind"`
-		} `json:"personal_calendar"`
-		SharedCalendars []struct {
-			ID string `json:"id"`
-		} `json:"shared_calendars"`
-	}
-	decodeResponse(t, meResp, &me)
-	if me.PersonalCalendar.Kind != "personal" || !containsCalendar(me.SharedCalendars, "cal_002") {
-		t.Fatalf("expected personal calendar and accepted shared membership, got %#v", me)
-	}
-
-	previewResp := mustRequest(t, client, http.MethodGet, baseURL+"/v1/invites/"+invite.InviteCode, "", nil)
-	if previewResp.StatusCode != http.StatusOK {
-		previewResp.Body.Close()
-		t.Fatalf("accepted invite preview: expected 200, got %d", previewResp.StatusCode)
-	}
-	var preview struct {
-		Invite struct {
-			AcceptedByUserID string `json:"accepted_by_user_id"`
-			AcceptedAt       string `json:"accepted_at"`
-		} `json:"invite"`
-	}
-	decodeResponse(t, previewResp, &preview)
-	if preview.Invite.AcceptedByUserID != registration.User.ID || preview.Invite.AcceptedAt == "" {
-		t.Fatalf("expected accepted invite metadata for %q, got %#v", registration.User.ID, preview.Invite)
+	defer inviteResp.Body.Close()
+	if inviteResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("household invite: expected 403, got %d", inviteResp.StatusCode)
 	}
 }
 
