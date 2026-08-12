@@ -67,6 +67,12 @@ dayflow_validate_issue_key() {
   [[ "${1:-}" =~ ^CEN-[0-9]+$ ]]
 }
 
+dayflow_issue_key_from_json_file() {
+  local file_name="${1##*/}"
+  [[ "$file_name" =~ ^(CEN-[0-9]+)\.json$ ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
 dayflow_issue_number() {
   local issue_key="$1"
   dayflow_validate_issue_key "$issue_key" || return 1
@@ -1922,7 +1928,7 @@ dayflow_reconcile() {
   fi
   for state_file in "$DAYFLOW_STATE_ROOT"/CEN-*.json; do
     [[ -f "$state_file" ]] || continue
-    target="$(basename "$state_file" .json)"
+    target="$(dayflow_issue_key_from_json_file "$state_file")" || continue
     if ! dayflow_acquire_lock "$target"; then
       rc=1
       continue

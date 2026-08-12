@@ -266,13 +266,16 @@ run_webhook_retry_and_lock_test() {
 }
 
 run_stale_done_reconciliation_skip_test() {
-  local test_root seed state_file
+  local test_root seed state_file auxiliary_file auxiliary_before
   test_root="$(mktemp -d)"
   seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
   dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
   state_file="$DAYFLOW_STATE_ROOT/CEN-29.json"
   mkdir -p "$DAYFLOW_STATE_ROOT"
   jq -n '{issue:"CEN-29",status:"done",branch:"feature/tasks-29-stacked-delivery",pr_number:29}' >"$state_file"
+  auxiliary_file="$DAYFLOW_STATE_ROOT/CEN-28-publication.json"
+  jq -n '{issue:"CEN-28",status:"publication-retry",publication:{phase:"committed"}}' >"$auxiliary_file"
+  auxiliary_before="$(<"$auxiliary_file")"
   export DAYFLOW_ISSUE_FIXTURE_FILE="$test_root/missing-linear-fixture.json"
   export FAKE_GH_PR_STATE=MERGED FAKE_GH_BASE_BRANCH=feature/tasks-28-stack-base
 
@@ -280,6 +283,8 @@ run_stale_done_reconciliation_skip_test() {
   "$SOURCE_ROOT/scripts/dayflow_runner.sh" reconcile >/dev/null
 
   assert_eq 'done' "$(jq -r '.status' "$state_file")" 'stale completed record remains terminal'
+  assert_eq "$auxiliary_before" "$(<"$auxiliary_file")" 'all-issue reconciliation ignores auxiliary state records'
+  assert_failure 'auxiliary state record acquires no issue lock' test -e "$DAYFLOW_STATE_ROOT/CEN-28-publication.lock"
   assert_failure 'stale completed record makes no Linear call' test -s "$FAKE_CURL_LOG"
   assert_failure 'stale completed stacked PR makes no GitHub call' test -s "$FAKE_GH_LOG"
   rm -rf "$test_root"
@@ -574,7 +579,9 @@ run_owned_recovery_gate_case() {
   rm -rf "$test_root"
 }
 
-if [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "locks" ]]; then
+if [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "state-scan" ]]; then
+  run_stale_done_reconciliation_skip_test
+elif [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "locks" ]]; then
   run_webhook_retry_and_lock_test
 elif [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "reconciliation" ]]; then
   run_stale_done_reconciliation_skip_test
