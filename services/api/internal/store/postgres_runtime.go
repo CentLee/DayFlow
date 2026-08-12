@@ -309,7 +309,7 @@ func (s *PostgresStore) ListCalendars(userID string) []domain.Calendar {
 SELECT c.id, c.kind, c.name, c.color, c.updated_at, cm.role
 FROM calendar_members cm
 JOIN calendars c ON c.id = cm.calendar_id
-WHERE cm.user_id = $1 AND c.kind = 'shared'
+WHERE cm.user_id = $1 AND c.kind IN ('shared', 'household')
 ORDER BY c.id ASC`, userID)
 	if err != nil {
 		return []domain.Calendar{}
@@ -896,9 +896,10 @@ LEFT JOIN calendar_members cm ON cm.calendar_id = c.id AND cm.user_id = $2
 WHERE c.id = $1`, calendarID, userID)
 
 	var record postgresCalendarRecord
+	var ownerUserID sql.NullString
 	var role sql.NullString
 	var updatedAt time.Time
-	if err := row.Scan(&record.calendar.ID, &record.calendar.Kind, &record.calendar.Name, &record.calendar.Color, &record.ownerUserID, &updatedAt, &role); err != nil {
+	if err := row.Scan(&record.calendar.ID, &record.calendar.Kind, &record.calendar.Name, &record.calendar.Color, &ownerUserID, &updatedAt, &role); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return postgresCalendarRecord{}, "", ErrNotFound
 		}
@@ -906,6 +907,9 @@ WHERE c.id = $1`, calendarID, userID)
 	}
 	if !role.Valid {
 		return postgresCalendarRecord{}, "", ErrForbidden
+	}
+	if ownerUserID.Valid {
+		record.ownerUserID = ownerUserID.String
 	}
 	record.calendar.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
 	return record, role.String, nil

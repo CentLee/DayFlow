@@ -111,6 +111,24 @@ func newRepository(cfg Config) (store.Repository, func() error, error) {
 			return nil, nil, err
 		}
 	}
+	postgresStore := store.NewPostgresStore(db)
+	if mode == StoreModePostgres {
+		if cfg.SeedMode == SeedModeDemo || cfg.SeedMode == SeedModeTest {
+			if err := postgresStore.EnsureDemoSeed(ctx); err != nil {
+				_ = db.Close()
+				return nil, nil, fmt.Errorf("seed postgres runtime fixtures: %w", err)
+			}
+		}
+		topology, err := topologyFromEnv()
+		if err != nil {
+			_ = db.Close()
+			return nil, nil, fmt.Errorf("deployment readiness: %w", err)
+		}
+		if err := applyTwoPersonTopology(ctx, db, topology); err != nil {
+			_ = db.Close()
+			return nil, nil, fmt.Errorf("deployment readiness: %w", err)
+		}
+	}
 
 	if mode == StoreModeHybrid {
 		hybrid := store.NewHybridStore(memory, store.NewPostgresBudgetStore(db))
@@ -121,14 +139,9 @@ func newRepository(cfg Config) (store.Repository, func() error, error) {
 		return hybrid, db.Close, nil
 	}
 
-	postgresStore := store.NewPostgresStore(db)
 	switch cfg.SeedMode {
 	case "", SeedModeNone:
 	case SeedModeDemo, SeedModeTest:
-		if err := postgresStore.EnsureDemoSeed(ctx); err != nil {
-			_ = db.Close()
-			return nil, nil, fmt.Errorf("seed postgres runtime: %w", err)
-		}
 	default:
 		_ = db.Close()
 		return nil, nil, fmt.Errorf("unsupported DAYFLOW_SEED_MODE %q", cfg.SeedMode)
