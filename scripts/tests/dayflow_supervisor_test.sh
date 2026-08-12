@@ -117,11 +117,19 @@ dayflow_supervisor_release_lock
 
 printf '%s\n' '{"identifier":"CEN-70","pid":999999,"parallel_safe":true,"write_scopes":["scripts/a"]}' >"$DAYFLOW_SUPERVISOR_CLAIM_ROOT/CEN-70.json"
 printf '%s\n' '{"status":"running"}' >"$DAYFLOW_STATE_ROOT/CEN-70.json"
+auxiliary_claim="$DAYFLOW_SUPERVISOR_CLAIM_ROOT/CEN-70-publication.json"
+auxiliary_process_start="$(dayflow_process_start_identity "$$")"
+jq -n --arg identifier CEN-70-publication --argjson pid "$$" --arg process_start "$auxiliary_process_start" \
+  '{identifier:$identifier,pid:$pid,process_start:$process_start,parallel_safe:true,write_scopes:["scripts/auxiliary"]}' >"$auxiliary_claim"
+assert_eq '0' "$(dayflow_supervisor_active_count)" 'auxiliary claim does not consume supervisor capacity'
 assert_failure 'dead claim with running state fails closed' dayflow_supervisor_reconcile_claims
 assert_success 'unsafe stale claim is preserved' test -f "$DAYFLOW_SUPERVISOR_CLAIM_ROOT/CEN-70.json"
 printf '%s\n' '{"status":"blocked"}' >"$DAYFLOW_STATE_ROOT/CEN-70.json"
 assert_success 'terminal stale claim is restart-safe' dayflow_supervisor_reconcile_claims
 assert_failure 'terminal stale claim is released' test -f "$DAYFLOW_SUPERVISOR_CLAIM_ROOT/CEN-70.json"
+assert_success 'auxiliary claim is preserved without claim handling' test -f "$auxiliary_claim"
+auxiliary_status="$(dayflow_supervisor_status)"
+assert_eq '0' "$(jq '.claims | length' <<<"$auxiliary_status")" 'supervisor status excludes auxiliary claims'
 
 launchd_root="$TEST_TMP/canonical"
 launchd_log="$TEST_TMP/launchctl.log"
@@ -229,10 +237,16 @@ for cleanup_issue in CEN-28 CEN-62 CEN-63; do
   jq -n --arg issue "$cleanup_issue" --arg branch "$cleanup_branch" --arg worktree "$DAYFLOW_WORKTREE_ROOT/$cleanup_issue" \
     '{issue:$issue,status:"done",branch:$branch,worktree:$worktree}' >"$DAYFLOW_STATE_ROOT/$cleanup_issue.json"
 done
+cleanup_status_log="$TEST_TMP/cleanup-status.log"
+auxiliary_cleanup_issue=CEN-28-publication
+mkdir -p "$DAYFLOW_WORKTREE_ROOT/$auxiliary_cleanup_issue/.git"
+jq -n --arg issue CEN-28 --arg branch feature/tasks-28-publication --arg worktree "$DAYFLOW_WORKTREE_ROOT/$auxiliary_cleanup_issue" \
+  '{issue:$issue,status:"done",branch:$branch,worktree:$worktree}' >"$DAYFLOW_STATE_ROOT/$auxiliary_cleanup_issue.json"
 printf '%s\n' dirty >"$DAYFLOW_WORKTREE_ROOT/CEN-63/untracked.txt"
 dayflow_status_issue() {
   local issue_key="$1"
   local state_file branch
+  printf '%s\n' "$issue_key" >>"$cleanup_status_log"
   state_file="$DAYFLOW_STATE_ROOT/$issue_key.json"
   branch="$(jq -r '.branch' "$state_file")"
   jq -n --arg issue "$issue_key" --arg branch "$branch" --arg done "$DAYFLOW_STATE_DONE_NAME" \
@@ -242,6 +256,7 @@ assert_failure 'dirty completed worktree makes cleanup fail closed' dayflow_supe
 assert_failure 'clean completed worktree removed non-forced' test -e "$DAYFLOW_WORKTREE_ROOT/CEN-62"
 assert_success 'dirty completed worktree preserved' test -e "$DAYFLOW_WORKTREE_ROOT/CEN-63/.git"
 assert_success 'CEN-28 is always preserved' test -e "$DAYFLOW_WORKTREE_ROOT/CEN-28/.git"
+assert_failure 'cleanup never checks auxiliary state against lifecycle services' rg -Fxq "$auxiliary_cleanup_issue" "$cleanup_status_log"
 assert_eq 'true' "$(jq -r '.worktree_cleaned' "$DAYFLOW_STATE_ROOT/CEN-62.json")" 'cleanup state proof persisted'
 assert_failure 'cleanup sends no Discord delivery' rg -q 'discord' "$FAKE_CURL_LOG"
 

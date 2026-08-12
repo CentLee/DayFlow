@@ -278,6 +278,7 @@ dayflow_supervisor_reconcile_claims() {
   local claim issue_key pid process_start state_file status rc=0
   for claim in "$DAYFLOW_SUPERVISOR_CLAIM_ROOT"/CEN-*.json; do
     [[ -f "$claim" ]] || continue
+    dayflow_issue_key_from_json_file "$claim" >/dev/null || continue
     issue_key="$(jq -r '.identifier // ""' "$claim")"
     pid="$(jq -r '.pid // 0' "$claim")"
     process_start="$(jq -r '.process_start // ""' "$claim")"
@@ -304,6 +305,7 @@ dayflow_supervisor_active_count() {
   local claim pid process_start count=0
   for claim in "$DAYFLOW_SUPERVISOR_CLAIM_ROOT"/CEN-*.json; do
     [[ -f "$claim" ]] || continue
+    dayflow_issue_key_from_json_file "$claim" >/dev/null || continue
     pid="$(jq -r '.pid // 0' "$claim")"
     process_start="$(jq -r '.process_start // ""' "$claim")"
     if dayflow_pid_identity_matches "$pid" "$process_start"; then
@@ -334,7 +336,9 @@ dayflow_supervisor_select() {
           compatible=false
           break
         fi
-      done < <({ for peer in "$DAYFLOW_SUPERVISOR_CLAIM_ROOT"/CEN-*.json; do [[ -f "$peer" ]] && jq -c '.' "$peer"; done; cat "$selected_file"; } 2>/dev/null)
+      done < <({ for peer in "$DAYFLOW_SUPERVISOR_CLAIM_ROOT"/CEN-*.json; do
+        [[ -f "$peer" ]] && dayflow_issue_key_from_json_file "$peer" >/dev/null && jq -c '.' "$peer"
+      done; cat "$selected_file"; } 2>/dev/null)
     fi
     [[ "$compatible" == "true" ]] || continue
     printf '%s\n' "$candidate" >>"$selected_file"
@@ -377,7 +381,7 @@ dayflow_supervisor_cleanup_completed() {
   local state_file issue_key worktree status branch status_json rc=0 fetched=false
   for state_file in "$DAYFLOW_STATE_ROOT"/CEN-*.json; do
     [[ -f "$state_file" ]] || continue
-    issue_key="$(basename "$state_file" .json)"
+    issue_key="$(dayflow_issue_key_from_json_file "$state_file")" || continue
     [[ "$issue_key" != "CEN-28" ]] || continue
     status="$(jq -r '.status // ""' "$state_file")"
     [[ "$status" == "done" ]] || continue
@@ -528,7 +532,7 @@ dayflow_supervisor_status() {
   [[ -f "$DAYFLOW_SUPERVISOR_SNAPSHOT" ]] && snapshot="$(jq -c '.' "$DAYFLOW_SUPERVISOR_SNAPSHOT")"
   if [[ -d "$DAYFLOW_SUPERVISOR_CLAIM_ROOT" ]]; then
     for claim in "$DAYFLOW_SUPERVISOR_CLAIM_ROOT"/CEN-*.json; do
-      [[ -f "$claim" ]] && claim_files+=("$claim")
+      [[ -f "$claim" ]] && dayflow_issue_key_from_json_file "$claim" >/dev/null && claim_files+=("$claim")
     done
     if (( ${#claim_files[@]} > 0 )); then
       claims="$(jq -s '.' "${claim_files[@]}")" || return 1
