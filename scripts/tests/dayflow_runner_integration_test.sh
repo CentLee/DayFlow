@@ -265,20 +265,64 @@ run_webhook_retry_and_lock_test() {
   rm -rf "$test_root"
 }
 
-run_merged_base_integrity_test() {
-  local test_root seed state_file branch worktree head
+run_stale_done_reconciliation_skip_test() {
+  local test_root seed state_file
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  state_file="$DAYFLOW_STATE_ROOT/CEN-29.json"
+  mkdir -p "$DAYFLOW_STATE_ROOT"
+  jq -n '{issue:"CEN-29",status:"done",branch:"feature/tasks-29-stacked-delivery",pr_number:29}' >"$state_file"
+  export DAYFLOW_ISSUE_FIXTURE_FILE="$test_root/missing-linear-fixture.json"
+  export FAKE_GH_PR_STATE=MERGED FAKE_GH_BASE_BRANCH=feature/tasks-28-stack-base
+
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" reconcile CEN-29 >/dev/null
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" reconcile >/dev/null
+
+  assert_eq 'done' "$(jq -r '.status' "$state_file")" 'stale completed record remains terminal'
+  assert_failure 'stale completed record makes no Linear call' test -s "$FAKE_CURL_LOG"
+  assert_failure 'stale completed stacked PR makes no GitHub call' test -s "$FAKE_GH_LOG"
+  rm -rf "$test_root"
+}
+
+run_merged_develop_reconciliation_test() {
+  local test_root seed state_file
   test_root="$(mktemp -d)"
   seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
   dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
   dayflow_prepare_notification_fixture
   export FAKE_CODEX_MODE=success FAKE_REVIEW_MODE=clean
   "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
-  export FAKE_GH_PR_STATE=MERGED FAKE_GH_BASE_BRANCH=main
-  if "$SOURCE_ROOT/scripts/dayflow_runner.sh" reconcile CEN-29 >/dev/null 2>&1; then
-    test_fail 'merged non-develop PR must not close the issue'
-  fi
   state_file="$DAYFLOW_STATE_ROOT/CEN-29.json"
-  assert_failure 'non-develop merge must not mark Done' test "$(jq -r '.status' "$state_file")" = done
+  : >"$FAKE_CURL_LOG"
+  export FAKE_GH_PR_STATE=MERGED
+
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" reconcile CEN-29 >/dev/null
+
+  assert_eq 'done' "$(jq -r '.status' "$state_file")" 'merged develop PR closes active local record'
+  assert_file_contains "$FAKE_CURL_LOG" 'state-done' 'merged develop PR transitions Linear to Done'
+  rm -rf "$test_root"
+}
+
+run_active_wrong_base_reconciliation_test() {
+  local test_root seed state_file state_before
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  export FAKE_CODEX_MODE=success FAKE_REVIEW_MODE=clean
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
+  state_file="$DAYFLOW_STATE_ROOT/CEN-29.json"
+  state_before="$(<"$state_file")"
+  : >"$FAKE_CURL_LOG"
+  export FAKE_GH_BASE_BRANCH=feature/tasks-28-stack-base
+
+  if "$SOURCE_ROOT/scripts/dayflow_runner.sh" reconcile CEN-29 >/dev/null 2>&1; then
+    test_fail 'active wrong-base PR must fail reconciliation'
+  fi
+
+  assert_eq "$state_before" "$(<"$state_file")" 'active wrong-base PR preserves fail-closed local state'
+  assert_failure 'active wrong-base PR does not transition Linear to Done' rg -q -- 'state-done' "$FAKE_CURL_LOG"
   rm -rf "$test_root"
 }
 
@@ -532,6 +576,10 @@ run_owned_recovery_gate_case() {
 
 if [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "locks" ]]; then
   run_webhook_retry_and_lock_test
+elif [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "reconciliation" ]]; then
+  run_stale_done_reconciliation_skip_test
+  run_merged_develop_reconciliation_test
+  run_active_wrong_base_reconciliation_test
 elif [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "owned-recovery-gates" ]]; then
   run_owned_recovery_gate_case publication-retry preflight
   run_owned_recovery_gate_case publication-retry linear
@@ -561,7 +609,9 @@ else
   run_final_blocker_visibility_test
   run_ci_timeout_test
   run_webhook_retry_and_lock_test
-  run_merged_base_integrity_test
+  run_stale_done_reconciliation_skip_test
+  run_merged_develop_reconciliation_test
+  run_active_wrong_base_reconciliation_test
   run_merged_reviewed_head_integrity_test
   run_merged_linear_done_rejection_test
   run_cross_issue_merge_ready_store_lock_test

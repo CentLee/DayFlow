@@ -85,6 +85,8 @@ The default execution sandbox is `workspace-write`, approval policy is `never`, 
 
 Runner `status` is read-only. Runner `reconcile [CEN-N]` handles one issue and runner `reconcile` handles all locally owned issues. Supervisor `reconcile` combines claim recovery with that all-issue reconciliation; supervisor `cleanup` performs only guarded local cleanup. `start` atomically captures `LINEAR_API_KEY` and effective `PATH` in canonical `.dayflow/supervisor.env` before loading the per-user `launchd` job; `stop` unloads it, and supervisor `status` reports scheduling, snapshot, and claims without exposing the environment or dispatching work.
 
+Local records already marked `done` are terminal reconciliation inputs and are skipped before any Linear or GitHub lookup. This keeps historical merged records, including completed stacked PRs with a non-`develop` base, from blocking a supervisor cycle. Every non-`done` local state remains subject to the normal develop-target, reviewed-head, CI, and lifecycle checks and fails closed on a mismatch.
+
 ### Merged PR event closure
 
 `.github/workflows/merge-lifecycle.yml` runs when a pull request closes. The deterministic reconciler accepts only a merged, `develop`-targeted PR whose repository-owned head matches `feature/tasks-N-<slug>`. It derives `CEN-N` from that branch, reads the issue from Linear, and moves it to `Done` only when it is not already there.

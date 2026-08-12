@@ -1521,13 +1521,15 @@ dayflow_record_merge_ready() {
 
 dayflow_reconcile_one() {
   local issue_key="$1"
-  local state_file issue_json issue_id branch prs pr_json pr_number pr_url head_sha reviewed_head_sha
+  local state_file local_status issue_json issue_id branch prs pr_json pr_number pr_url head_sha reviewed_head_sha
   local is_draft pr_state current_state base_branch head_branch merge_state requested_changes
   state_file="$(dayflow_state_file "$issue_key")"
   [[ -f "$state_file" ]] || {
     dayflow_error "no local state for $issue_key"
     return 1
   }
+  local_status="$(jq -r '.status // ""' "$state_file")" || return 1
+  [[ "$local_status" != "done" ]] || return 0
   issue_json="$(dayflow_linear_issue "$issue_key")" || return 1
   issue_id="$(jq -r '.id' <<<"$issue_json")"
   current_state="$(jq -r '.state.name' <<<"$issue_json")"
