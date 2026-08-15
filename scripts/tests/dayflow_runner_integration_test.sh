@@ -571,6 +571,60 @@ run_model_rejection_test() {
   rm -rf "$test_root"
 }
 
+run_runner_guard_classification_case() (
+  local guard="$1"
+  local expected_reason="$2"
+  local test_root seed
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  export DAYFLOW_RESOURCE_TOKEN_LIMIT=1000
+  export DAYFLOW_CONTEXT_TOKEN_LIMIT=1000
+  export DAYFLOW_LOG_LIMIT_BYTES=5242880
+  export DAYFLOW_STALL_LIMIT_SECONDS=10
+  export DAYFLOW_EXECUTION_LIMIT_SECONDS=10
+  export FAKE_REVIEW_MODE=clean
+
+  case "$guard" in
+    resource-token)
+      export FAKE_CODEX_MODE=token-limit DAYFLOW_RESOURCE_TOKEN_LIMIT=10
+      ;;
+    context-token)
+      export FAKE_CODEX_MODE=token-limit DAYFLOW_CONTEXT_TOKEN_LIMIT=10
+      ;;
+    command-output)
+      export FAKE_CODEX_MODE=output-limit DAYFLOW_LOG_LIMIT_BYTES=512
+      ;;
+    stall)
+      export FAKE_CODEX_MODE=stall DAYFLOW_STALL_LIMIT_SECONDS=1
+      ;;
+    timeout)
+      export FAKE_CODEX_MODE=execution-limit DAYFLOW_EXECUTION_LIMIT_SECONDS=1
+      ;;
+    *)
+      test_fail "unknown runner guard fixture: $guard"
+      ;;
+  esac
+
+  if "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null 2>&1; then
+    test_fail "$guard guard should fail the run"
+  fi
+  assert_eq 'blocked' "$(jq -r '.status' "$DAYFLOW_STATE_ROOT/CEN-29.json")" "$guard guard records blocked state"
+  assert_eq "$expected_reason" "$(jq -r '.last_error' "$DAYFLOW_STATE_ROOT/CEN-29.json")" "$guard guard reason is preserved"
+  assert_failure "$guard guard is not classified as model rejection" rg -q 'model rejected' "$DAYFLOW_STATE_ROOT/CEN-29.json"
+  assert_eq 'uncached_input_tokens + output_tokens' "$(jq -r '.token_budget.basis.resource' "$DAYFLOW_STATE_ROOT/CEN-29.json")" "$guard state exposes resource budget basis"
+  rm -rf "$test_root"
+)
+
+run_runner_guard_classification_test() {
+  run_runner_guard_classification_case resource-token 'uncached/output token limit exceeded (10)'
+  run_runner_guard_classification_case context-token 'total context token limit exceeded (10)'
+  run_runner_guard_classification_case command-output 'command output limit exceeded (512 bytes)'
+  run_runner_guard_classification_case stall 'no progress for 1s'
+  run_runner_guard_classification_case timeout 'execution limit exceeded (1s)'
+}
+
 run_publication_recovery_preflight_preservation_test() {
   local test_root seed hook before after
   test_root="$(mktemp -d)"
@@ -735,6 +789,8 @@ elif [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "owned-recovery-gates" ]]; then
   run_owned_recovery_gate_case publication-retry linear
   run_owned_recovery_gate_case review-changes preflight
   run_owned_recovery_gate_case review-changes linear
+elif [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "runner-guards" ]]; then
+  run_runner_guard_classification_test
 else
   run_commit_then_push_recovery_test
   run_push_then_pr_recovery_test
@@ -768,5 +824,6 @@ else
   run_merged_reviewed_head_integrity_test
   run_merged_linear_done_rejection_test
   run_cross_issue_merge_ready_store_lock_test
+  run_runner_guard_classification_test
 fi
 finish_tests 'dayflow_runner_integration_test'
