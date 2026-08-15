@@ -57,6 +57,8 @@ Admission requires:
 - two to five concrete `Done When` checks
 - one-PR scope
 
+Before a non-publication Primary Agent path can mutate an issue worktree or launch Codex, admission also resolves the configured Linear transition targets `In Progress`, `In Review`, `Done`, and `Blocked`. Missing workflow state configuration produces an actionable local `blocked` record with `configuration_block` metadata and a Discord alert before worktree creation or model launch; the runner does not attempt to synthesize or change Linear workflow states.
+
 Delivery requires:
 
 - `feature/tasks-<number>-<slug>` checked out in `.dayflow/worktrees/CEN-N`
@@ -67,7 +69,7 @@ Delivery requires:
 - no P0-P2 finding after at most one same-session remediation
 - validated structured evidence for 1-8 passed tests
 
-Codex subprocesses receive no Linear, GitHub, or Discord credential variables. Publication is a persisted `edited -> committed -> pushed -> pr-created` state machine; retries reconcile local HEAD, remote HEAD, and PR head/base/proof before continuing without re-running the primary model.
+Codex subprocesses receive no Linear, GitHub, or Discord credential variables. Publication is a persisted `edited -> committed -> pushed -> pr-created` state machine; retries reconcile local HEAD, remote HEAD, and PR head/base/proof before continuing without re-running the primary model. GitHub CLI GraphQL failure on PR discovery or creation triggers a REST pulls fallback, including an existence check before REST creation. The normalized REST result is also used by delivery validation, read-only `status`, and `reconcile`, so a valid existing PR remains operable when GraphQL lookup is unavailable. Post-commit or post-push failure remains model-free `publication-retry` and preserves the exact worktree.
 
 ## Model and Resource Policy
 

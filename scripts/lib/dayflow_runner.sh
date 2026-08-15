@@ -471,6 +471,50 @@ dayflow_linear_set_state() {
   jq -e '.data.issueUpdate.success == true' >/dev/null <<<"$response"
 }
 
+dayflow_validate_lifecycle_states() {
+  local state_name missing=""
+  for state_name in \
+    "$DAYFLOW_STATE_IN_PROGRESS_NAME" \
+    "$DAYFLOW_STATE_IN_REVIEW_NAME" \
+    "$DAYFLOW_STATE_DONE_NAME" \
+    "$DAYFLOW_STATE_BLOCKED_NAME"; do
+    if ! dayflow_linear_state_id "$state_name" >/dev/null; then
+      missing="${missing:+$missing, }$state_name"
+    fi
+  done
+  if [[ -n "$missing" ]]; then
+    DAYFLOW_LIFECYCLE_CONFIGURATION_ERROR="Linear team ${DAYFLOW_LINEAR_TEAM_ID} is missing configured lifecycle state(s): ${missing}. Configure the workflow state names or matching DAYFLOW_STATE_*_ID values before retrying."
+    export DAYFLOW_LIFECYCLE_CONFIGURATION_ERROR
+    dayflow_error "$DAYFLOW_LIFECYCLE_CONFIGURATION_ERROR"
+    return 1
+  fi
+  DAYFLOW_LIFECYCLE_CONFIGURATION_ERROR=""
+  export DAYFLOW_LIFECYCLE_CONFIGURATION_ERROR
+}
+
+dayflow_record_lifecycle_configuration_block() {
+  local issue_json="$1"
+  local primary="$2"
+  local model="$3"
+  local reasoning="$4"
+  local branch="$5"
+  local issue_key issue_id title reason
+  issue_key="$(jq -r '.identifier' <<<"$issue_json")"
+  issue_id="$(jq -r '.id' <<<"$issue_json")"
+  title="$(jq -r '.title' <<<"$issue_json")"
+  reason="${DAYFLOW_LIFECYCLE_CONFIGURATION_ERROR:-Linear lifecycle state configuration is incomplete.}"
+  dayflow_state_update "$issue_key" \
+    --arg issue "$issue_key" --arg id "$issue_id" --arg title "$title" --arg agent "$primary" \
+    --arg model "$model" --arg reasoning "$reasoning" --arg branch "$branch" --arg reason "$reason" \
+    --arg at "$(dayflow_now_iso)" '
+      (.status // "") as $previous_status
+      | . + {issue: $issue, issue_id: $id, title: $title, primary_agent: $agent, model: $model,
+        reasoning: $reasoning, branch: $branch, status: "blocked", last_error: $reason,
+        configuration_block: {kind: "linear-lifecycle-states", action: $reason, previous_status: $previous_status},
+        updated_at: $at}'
+  dayflow_notify_state "$issue_key" "$DAYFLOW_STATE_BLOCKED_NAME" "$reason"
+}
+
 dayflow_load_notifications() {
   if [[ -f "$DAYFLOW_NOTIFICATIONS_ENV_FILE" ]]; then
     # shellcheck disable=SC1090
@@ -602,6 +646,53 @@ dayflow_github_repo() {
 
 dayflow_gh() {
   GH_CONFIG_DIR="$DAYFLOW_GH_CONFIG_DIR" "$DAYFLOW_GH_BIN" "$@"
+}
+
+dayflow_pr_for_branch_rest() {
+  local branch="$1"
+  local state="${2:-open}"
+  local repo owner response
+  repo="$(dayflow_github_repo)" || return 1
+  owner="${repo%%/*}"
+  response="$(dayflow_gh api -X GET "repos/$repo/pulls" \
+    -f "head=${owner}:${branch}" -f "state=${state}" -F per_page=1 2>/dev/null)" || return 1
+  jq -ce '
+    map({
+      number,
+      url: .html_url,
+      isDraft: (.draft // false),
+      state: (if .merged_at != null then "MERGED" else (.state | ascii_upcase) end),
+      headRefName: .head.ref,
+      headRefOid: .head.sha,
+      baseRefName: .base.ref,
+      mergeStateStatus: ((.mergeable_state // "unknown") | ascii_upcase),
+      body: (.body // "")
+    })
+  ' <<<"$response"
+}
+
+dayflow_create_pr() {
+  local repo="$1"
+  local branch="$2"
+  local title="$3"
+  local body_file="$4"
+  local existing response body
+  if dayflow_gh pr create -R "$repo" --draft --base develop --head "$branch" \
+    --title "$title" --body-file "$body_file" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  existing="$(dayflow_pr_for_branch_rest "$branch" open)" || existing='[]'
+  if jq -e 'length > 0' >/dev/null <<<"$existing"; then
+    return 0
+  fi
+
+  body="$(<"$body_file")"
+  response="$(dayflow_gh api --method POST "repos/$repo/pulls" \
+    -f "title=$title" -f "head=$branch" -f 'base=develop' -f "body=$body" -F draft=true 2>/dev/null)" || return 1
+  jq -e --arg branch "$branch" '
+    (.number | type == "number") and .head.ref == $branch and .base.ref == "develop"
+  ' >/dev/null <<<"$response"
 }
 
 dayflow_git_publish() {
@@ -1087,10 +1178,15 @@ dayflow_block_issue() {
 dayflow_pr_for_branch() {
   local branch="$1"
   local state="${2:-open}"
-  local repo
+  local repo response
   repo="$(dayflow_github_repo)"
-  dayflow_gh pr list -R "$repo" --head "$branch" --state "$state" --limit 1 \
-    --json number,url,isDraft,state,headRefName,headRefOid,baseRefName,mergeStateStatus,body
+  if response="$(dayflow_gh pr list -R "$repo" --head "$branch" --state "$state" --limit 1 \
+    --json number,url,isDraft,state,headRefName,headRefOid,baseRefName,mergeStateStatus,body 2>/dev/null)" && \
+    jq -e 'type == "array"' >/dev/null 2>&1 <<<"$response"; then
+    printf '%s\n' "$response"
+    return 0
+  fi
+  dayflow_pr_for_branch_rest "$branch" "$state"
 }
 
 dayflow_path_matches_scope() {
@@ -1315,8 +1411,7 @@ dayflow_publish_issue_changes() {
       dayflow_gh pr ready -R "$repo" --undo "$pr_number" >/dev/null || return 1
     fi
   else
-    dayflow_gh pr create -R "$repo" --draft --base develop --head "$branch" \
-      --title "${issue_key}: ${commit_title}" --body-file "$body_file" >/dev/null || return 1
+    dayflow_create_pr "$repo" "$branch" "${issue_key}: ${commit_title}" "$body_file" || return 1
   fi
   dayflow_state_update "$issue_key" --arg at "$(dayflow_now_iso)" '.publication.phase = "pr-created" | .updated_at = $at'
   dayflow_validate_delivery "$issue_key" "$branch" "$worktree"
@@ -1625,6 +1720,7 @@ dayflow_run_issue() {
   local timestamp prompt_file log_file output_file pr_json pr_number review_prompt review_log review_output
   local review_round=1 findings_comment remediation_prompt remediation_log remediation_output repo
   local pre_session_recovery=false publication_recovery=false requested_changes_recovery=false recovery_status=""
+  local lifecycle_validation_required=false
 
   dayflow_validate_issue_key "$issue_key" || {
     dayflow_error "invalid issue key: $issue_key"
@@ -1649,13 +1745,34 @@ dayflow_run_issue() {
   if dayflow_is_publication_recovery "$issue_key"; then
     publication_recovery=true
   fi
-  if [[ -f "$(dayflow_state_file "$issue_key")" && "$(dayflow_state_value "$issue_key" '.status // ""')" == "review-changes" ]]; then
+  if [[ -f "$(dayflow_state_file "$issue_key")" ]] && \
+     [[ "$(dayflow_state_value "$issue_key" '.status // ""')" == "review-changes" || \
+        "$(dayflow_state_value "$issue_key" '.configuration_block.previous_status // ""')" == "review-changes" ]]; then
     requested_changes_recovery=true
   fi
   if [[ "$publication_recovery" == "true" ]]; then
     recovery_status="publication-retry"
   elif [[ "$requested_changes_recovery" == "true" ]]; then
     recovery_status="review-changes"
+  fi
+
+  # Only runnable paths need lifecycle configuration. Never overwrite terminal
+  # local records merely because an operator invoked run for a completed issue.
+  if [[ "$publication_recovery" != "true" ]]; then
+    case "$linear_state" in
+      "$DAYFLOW_STATE_TODO_NAME"|"$DAYFLOW_STATE_IN_PROGRESS_NAME"|"$DAYFLOW_STATE_IN_REVIEW_NAME")
+        lifecycle_validation_required=true
+        ;;
+      "$DAYFLOW_STATE_BLOCKED_NAME")
+        [[ "$pre_session_recovery" == "true" ]] && lifecycle_validation_required=true
+        ;;
+    esac
+  fi
+
+  if [[ "$DAYFLOW_DRY_RUN" == "false" && "$lifecycle_validation_required" == "true" ]] && \
+     ! dayflow_validate_lifecycle_states; then
+    dayflow_record_lifecycle_configuration_block "$issue_json" "$primary" "$model" "$reasoning" "$branch"
+    return 1
   fi
 
   if [[ "$DAYFLOW_DRY_RUN" == "true" ]]; then

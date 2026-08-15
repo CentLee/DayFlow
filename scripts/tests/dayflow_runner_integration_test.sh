@@ -8,6 +8,49 @@ source "$TEST_DIR/testlib.sh"
 # shellcheck source=scripts/tests/system_test_helpers.sh
 source "$TEST_DIR/system_test_helpers.sh"
 
+write_rest_fallback_gh() {
+  local wrapper="$1"
+  cat >"$wrapper" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-} ${2:-}" == 'pr list' || ( "${1:-} ${2:-}" == 'pr create' && "${FAKE_GH_REST_CREATE:-false}" == 'true' ) ]]; then
+  printf 'GH_CONFIG_DIR=%s :: %s\n' "${GH_CONFIG_DIR:-}" "$*" >>"${FAKE_GH_LOG:?}"
+  exit 1
+fi
+
+if [[ "${1:-}" == 'api' && "$*" == *'repos/test/dayflow/pulls'* ]]; then
+  printf 'GH_CONFIG_DIR=%s :: %s\n' "${GH_CONFIG_DIR:-}" "$*" >>"${FAKE_GH_LOG:?}"
+  branch="${FAKE_PR_BRANCH:?}"
+  body=''
+  for arg in "$@"; do
+    case "$arg" in
+      head=*) branch="${arg#head=}"; branch="${branch#*:}" ;;
+      body=*) body="${arg#body=}" ;;
+    esac
+  done
+  head_sha="$(git -C "${FAKE_GIT_ROOT:?}" ls-remote --heads origin "refs/heads/$branch" | awk 'NR == 1 {print $1}')"
+  if [[ "$*" == *'--method POST'* ]]; then
+    printf '%s' "$body" >"${FAKE_GH_BODY_FILE:?}"
+    : >"${FAKE_GH_PR_CREATED_FILE:?}"
+  elif [[ ! -f "${FAKE_GH_PR_CREATED_FILE:?}" ]]; then
+    printf '%s\n' '[]'
+    exit 0
+  fi
+  draft=true
+  [[ -f "${FAKE_GH_READY_FILE:?}" ]] && draft=false
+  jq -n --argjson number 29 --arg branch "$branch" --arg head "$head_sha" --arg body "$(<"${FAKE_GH_BODY_FILE:?}")" \
+    --argjson draft "$draft" \
+    '{number:$number,html_url:"https://github.test/pr/29",draft:$draft,state:"open",merged_at:null,head:{ref:$branch,sha:$head},base:{ref:"develop"},mergeable_state:"clean",body:$body}' |
+    if [[ "$*" == *'--method POST'* ]]; then jq -c '.'; else jq -cs '.'; fi
+  exit 0
+fi
+
+exec "${FAKE_GH_DELEGATE_BIN:?}" "$@"
+EOF
+  chmod +x "$wrapper"
+}
+
 run_commit_then_push_recovery_test() {
   local test_root seed hook worktree
   test_root="$(mktemp -d)"
@@ -47,6 +90,8 @@ run_push_then_pr_recovery_test() {
     test_fail 'PR creation rejection should leave publication retry state'
   fi
   assert_eq 'pushed' "$(jq -r '.publication.phase' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'push phase persisted before PR failure'
+  assert_eq 'publication-retry' "$(jq -r '.status' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'post-push publication failure enters recovery'
+  assert_success 'post-push publication failure preserves worktree' test -e "$DAYFLOW_WORKTREE_ROOT/CEN-29/.git"
   "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
   assert_eq '1' "$(<"$FAKE_CODEX_PRIMARY_COUNT_FILE")" 'PR retry invokes no additional primary model'
   worktree="$(jq -r '.worktree' "$DAYFLOW_STATE_ROOT/CEN-29.json")"
@@ -54,6 +99,99 @@ run_push_then_pr_recovery_test() {
   assert_eq '2' "$(rg -c 'pr create' "$FAKE_GH_LOG")" 'PR retry occurs once after one definite creation failure'
   assert_success 'PR retry converges to one created PR state' test -f "$FAKE_GH_PR_CREATED_FILE"
   assert_eq 'merge-ready' "$(jq -r '.status' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'PR retry completes review lifecycle'
+  rm -rf "$test_root"
+}
+
+run_graphql_rest_publication_fallback_test() {
+  local test_root seed wrapper
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  wrapper="$test_root/gh-rest-fallback"
+  export FAKE_GH_DELEGATE_BIN="$DAYFLOW_GH_BIN"
+  write_rest_fallback_gh "$wrapper"
+  export DAYFLOW_GH_BIN="$wrapper"
+  export FAKE_GH_REST_CREATE=true
+  export FAKE_GH_PR_CREATED_FILE="$test_root/pr-created"
+  export FAKE_CODEX_MODE=success FAKE_REVIEW_MODE=clean
+  export FAKE_CODEX_PRIMARY_COUNT_FILE="$test_root/primary-count"
+
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
+  assert_eq 'merge-ready' "$(jq -r '.status' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'REST fallback publication lifecycle'
+  assert_eq 'pr-created' "$(jq -r '.publication.phase' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'REST-created PR publication phase'
+  assert_eq '1' "$(<"$FAKE_CODEX_PRIMARY_COUNT_FILE")" 'REST fallback launches one primary session'
+  assert_file_contains "$FAKE_GH_LOG" 'pr create' 'GraphQL PR creation was attempted first'
+  assert_file_contains "$FAKE_GH_LOG" 'api --method POST repos/test/dayflow/pulls' 'REST PR creation fallback was used'
+  assert_file_contains "$FAKE_GH_LOG" 'api -X GET repos/test/dayflow/pulls' 'REST PR discovery validates delivery'
+  rm -rf "$test_root"
+}
+
+run_missing_blocked_state_admission_test() {
+  local test_root seed wrapper delegate
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  unset DAYFLOW_STATE_BLOCKED_ID
+  delegate="$DAYFLOW_CURL_BIN"
+  wrapper="$test_root/curl-missing-blocked"
+  cat >"$wrapper" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *'states { nodes'* ]]; then
+  printf '%s\n' "$*" >>"${FAKE_CURL_LOG:?}"
+  printf '%s\n' '{"data":{"team":{"states":{"nodes":[{"id":"state-in-progress","name":"In Progress"},{"id":"state-in-review","name":"In Review"},{"id":"state-done","name":"Done"}]}}}}'
+  exit 0
+fi
+exec "${FAKE_CURL_DELEGATE_BIN:?}" "$@"
+EOF
+  chmod +x "$wrapper"
+  export FAKE_CURL_DELEGATE_BIN="$delegate"
+  export DAYFLOW_CURL_BIN="$wrapper"
+  export FAKE_CODEX_INVOCATION_COUNT_FILE="$test_root/invocations"
+
+  if "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null 2>&1; then
+    test_fail 'missing Linear Blocked state must reject admission'
+  fi
+  assert_eq 'blocked' "$(jq -r '.status' "$DAYFLOW_STATE_ROOT/CEN-29.json")" 'missing Blocked state records local block'
+  assert_file_contains "$DAYFLOW_STATE_ROOT/CEN-29.json" 'DAYFLOW_STATE_\*_ID values before retrying' 'configuration block is actionable'
+  assert_failure 'missing Blocked state creates no issue worktree' test -e "$DAYFLOW_WORKTREE_ROOT/CEN-29"
+  assert_failure 'missing Blocked state launches no primary model' test -e "$FAKE_CODEX_INVOCATION_COUNT_FILE"
+  assert_file_contains "$FAKE_CURL_LOG" 'discord.test/webhook' 'configuration block alerts Discord'
+  assert_failure 'missing Blocked state attempts no impossible transition' rg -q 'state-blocked' "$FAKE_CURL_LOG"
+  rm -rf "$test_root"
+}
+
+run_terminal_issue_skips_lifecycle_configuration_block_test() {
+  local test_root seed wrapper delegate issue_fixture
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  unset DAYFLOW_STATE_BLOCKED_ID
+  issue_fixture="$test_root/done-issue.json"
+  jq '.state.name = "Done"' "$DAYFLOW_ISSUE_FIXTURE_FILE" >"$issue_fixture"
+  export DAYFLOW_ISSUE_FIXTURE_FILE="$issue_fixture"
+  delegate="$DAYFLOW_CURL_BIN"
+  wrapper="$test_root/curl-missing-blocked"
+  cat >"$wrapper" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *'states { nodes'* ]]; then
+  printf '%s\n' '{"data":{"team":{"states":{"nodes":[{"id":"state-in-progress","name":"In Progress"},{"id":"state-in-review","name":"In Review"},{"id":"state-done","name":"Done"}]}}}}'
+  exit 0
+fi
+exec "${FAKE_CURL_DELEGATE_BIN:?}" "$@"
+EOF
+  chmod +x "$wrapper"
+  export FAKE_CURL_DELEGATE_BIN="$delegate"
+  export DAYFLOW_CURL_BIN="$wrapper"
+
+  assert_failure 'terminal issue remains non-runnable' "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29
+  assert_failure 'terminal issue creates no configuration block record' test -e "$DAYFLOW_STATE_ROOT/CEN-29.json"
+  assert_failure 'terminal issue creates no worktree' test -e "$DAYFLOW_WORKTREE_ROOT/CEN-29"
+  assert_failure 'terminal issue sends no configuration alert' rg -q 'discord.test/webhook' "$FAKE_CURL_LOG"
   rm -rf "$test_root"
 }
 
@@ -583,6 +721,11 @@ if [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "state-scan" ]]; then
   run_stale_done_reconciliation_skip_test
 elif [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "locks" ]]; then
   run_webhook_retry_and_lock_test
+elif [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "publication-fallback" ]]; then
+  run_push_then_pr_recovery_test
+  run_graphql_rest_publication_fallback_test
+  run_missing_blocked_state_admission_test
+  run_terminal_issue_skips_lifecycle_configuration_block_test
 elif [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "reconciliation" ]]; then
   run_stale_done_reconciliation_skip_test
   run_merged_develop_reconciliation_test
@@ -595,6 +738,9 @@ elif [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "owned-recovery-gates" ]]; then
 else
   run_commit_then_push_recovery_test
   run_push_then_pr_recovery_test
+  run_graphql_rest_publication_fallback_test
+  run_missing_blocked_state_admission_test
+  run_terminal_issue_skips_lifecycle_configuration_block_test
   run_missing_test_evidence_test
   run_publication_recovery_preflight_preservation_test
   run_requested_changes_auto_resume_test

@@ -13,6 +13,42 @@ trap 'rm -rf "$TEST_TMP"' EXIT
 seed="$(dayflow_create_test_repo "$TEST_TMP" "$SOURCE_ROOT")"
 dayflow_export_fake_environment "$TEST_TMP" "$SOURCE_ROOT" "$seed"
 dayflow_prepare_notification_fixture
+gh_delegate="$DAYFLOW_GH_BIN"
+gh_wrapper="$TEST_TMP/gh-graphql-list-failure"
+cat >"$gh_wrapper" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-} ${2:-}" == 'pr list' ]]; then
+  printf 'GH_CONFIG_DIR=%s :: %s\n' "${GH_CONFIG_DIR:-}" "$*" >>"${FAKE_GH_LOG:?}"
+  exit 1
+fi
+if [[ "${1:-}" == 'api' && "$*" == *'repos/test/dayflow/pulls'* ]]; then
+  printf 'GH_CONFIG_DIR=%s :: %s\n' "${GH_CONFIG_DIR:-}" "$*" >>"${FAKE_GH_LOG:?}"
+  if [[ ! -f "${FAKE_GH_PR_CREATED_FILE:?}" ]]; then
+    printf '%s\n' '[]'
+    exit 0
+  fi
+  branch="${FAKE_PR_BRANCH:?}"
+  head_sha="$(git -C "${FAKE_GIT_ROOT:?}" ls-remote --heads origin "refs/heads/$branch" | awk 'NR == 1 {print $1}')"
+  draft=true
+  [[ -f "${FAKE_GH_READY_FILE:?}" ]] && draft=false
+  state="${FAKE_GH_PR_STATE:-OPEN}"
+  rest_state=open
+  merged_at=null
+  if [[ "$state" == 'MERGED' ]]; then rest_state=closed; merged_at='"2026-08-15T00:00:00Z"'; fi
+  jq -n --arg branch "$branch" --arg head "${FAKE_GH_HEAD_SHA_OVERRIDE:-$head_sha}" \
+    --arg base "${FAKE_GH_BASE_BRANCH:-develop}" --arg merge "${FAKE_GH_MERGE_STATE:-clean}" \
+    --arg body "$(<"${FAKE_GH_BODY_FILE:?}")" --arg state "$rest_state" --argjson merged_at "$merged_at" \
+    --argjson draft "$draft" \
+    '[{number:29,html_url:"https://github.test/pr/29",draft:$draft,state:$state,merged_at:$merged_at,head:{ref:$branch,sha:$head},base:{ref:$base},mergeable_state:$merge,body:$body}]'
+  exit 0
+fi
+exec "${FAKE_GH_DELEGATE_BIN:?}" "$@"
+EOF
+chmod +x "$gh_wrapper"
+export FAKE_GH_DELEGATE_BIN="$gh_delegate"
+export DAYFLOW_GH_BIN="$gh_wrapper"
+export FAKE_GH_PR_CREATED_FILE="$TEST_TMP/pr-created"
 export FAKE_CODEX_MODE=success
 export FAKE_REVIEW_MODE=clean
 export FAKE_GH_PENDING_COUNT_FILE="$TEST_TMP/pending-checks"
@@ -30,6 +66,9 @@ assert_file_contains "$FAKE_GH_LOG" 'ready' 'PR was marked ready'
 assert_file_contains "$FAKE_CURL_LOG" 'state-in-progress' 'Linear start transition'
 assert_file_contains "$FAKE_CURL_LOG" 'state-in-review' 'Linear review transition'
 assert_file_contains "$FAKE_GH_COMMENTS_LOG" 'Outcome:.*passed' 'clean review result published'
+status_pr_number="$("$SOURCE_ROOT/scripts/dayflow_runner.sh" status CEN-29 | jq -r '.pull_request.number')"
+assert_eq '29' "$status_pr_number" 'status discovers valid PR through REST fallback'
+assert_file_contains "$FAKE_GH_LOG" 'api -X GET repos/test/dayflow/pulls' 'system lifecycle used REST PR discovery fallback'
 checks_count="$(rg -c 'pr checks' "$FAKE_GH_LOG")"
 assert_success 'CI wait polled until green' test "$checks_count" -ge 3
 
