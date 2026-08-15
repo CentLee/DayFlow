@@ -48,6 +48,8 @@ Owned `review-changes` and `publication-retry` work is eligible ahead of new `To
 
 Runnable issues require a `[Agent] title` and non-empty `Goal`, `Primary Agent`, `Inputs`, `Done When`, and `Out of Scope` sections. `Done When` must have two to five checks and the issue must fit one PR.
 
+Before creating or changing an issue worktree or launching a Primary Agent, a non-recovery run resolves the configured Linear `In Progress`, `In Review`, `Done`, and `Blocked` states. A missing state records a local `blocked` result with `configuration_block` metadata containing the missing name and configuration action, alerts Discord, and exits without attempting an impossible Linear `Blocked` transition. After the Linear workflow or matching `DAYFLOW_STATE_*_ID` setting is corrected, rerunning the issue continues through normal ownership checks. Publication-only recovery skips this gate because it never launches the Primary Agent.
+
 Only `Todo` starts a new workspace. `In Progress` and `In Review` resume only when `.dayflow/state/CEN-N.json` points to an existing worktree, matching branch, and persisted Primary Agent session. Other states are not runnable.
 
 New branches use `feature/tasks-<number>-<slug>` from `origin/develop`. Worktrees, state, and logs live under `.dayflow/` and are never tracked.
@@ -74,7 +76,7 @@ The Primary Agent must leave a pushed branch, at least one commit beyond `origin
 
 Every primary or remediation final output must be one bounded JSON object with a short `summary` and 1-8 `{name,status:"passed"}` test records. Missing, malformed, failed, or extra evidence blocks before publication; model-provided commands are never executed. Validated test names populate the PR proof. Linear, GitHub, and Discord credential variables are removed from primary, resume, and review Codex subprocesses.
 
-Publication persists `edited`, `committed`, `pushed`, and `pr-created` phases. A retry validates exact ownership, deterministic commit and HEAD, fast-forward remote state, develop PR base/head, and proof before continuing without another primary model call. It never duplicates commits or PRs, force-pushes, or guesses through an integrity mismatch.
+Publication persists `edited`, `committed`, `pushed`, and `pr-created` phases. PR discovery first uses the normal GitHub CLI view and falls back to GitHub's REST pulls endpoint when the CLI GraphQL path rejects the lookup; PR creation similarly falls back to REST after checking that the failed GraphQL attempt did not already create the PR. Delivery validation, `status`, and `reconcile` use the same normalized discovery result. A retry validates exact ownership, deterministic commit and HEAD, fast-forward remote state, develop PR base/head, and proof before continuing without another primary model call. A failure after commit or push remains `publication-retry` with the exact worktree and session preserved. It never duplicates commits or PRs, force-pushes, or guesses through an integrity mismatch.
 
 After review passes, the runner persists the reviewed head SHA, marks the PR ready, and moves Linear to `In Review`. It then waits for CI with a bounded, model-free polling interval and invokes reconciliation when checks turn green. A timeout leaves the issue safely in review for a later `reconcile` call. Merge-ready requires the current PR head to match the reviewed SHA, a `develop` base, a clean merge state, and green checks; any later push returns the PR to draft and requires review again. A merged PR moves to `Done` only when it still targets `develop` and matches the tracked branch.
 
@@ -103,6 +105,8 @@ The hosted job never deletes local `.dayflow` state or worktrees. Supervisor `on
 ## Recovery
 
 - Admission failure: fix the Linear metadata, return the issue to `Todo`, and rerun.
+- Lifecycle configuration block: add or map every named Linear workflow state reported in `last_error` (especially `Blocked`), then rerun; no worktree or model session was created by the rejected admission.
+- Publication retry: restore GitHub access or resolve the reported PR mismatch, then rerun; the runner resumes the persisted publication phase without another Primary Agent call.
 - Model, token, timeout, or delivery failure: inspect `status` and `.dayflow/logs`, retain the worktree, resolve the cause, then deliberately return the issue to a runnable state.
 - Requested changes: run `reconcile`, then `run CEN-N`; the same Primary Agent session resumes.
 - Failed merged-PR workflow: rerun the failed GitHub Actions job; use local `reconcile CEN-N` only as a deliberate fallback.

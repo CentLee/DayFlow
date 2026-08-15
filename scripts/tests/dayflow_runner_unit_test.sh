@@ -52,6 +52,31 @@ assert_failure 'unknown agent must fail closed' dayflow_model_for_agent unknown-
 assert_eq 'feature/tasks-29-replace-symphony-with-dayflow-local-runner' \
   "$(dayflow_branch_name CEN-29 '[Integration] Replace Symphony with DayFlow local runner')" 'branch naming'
 
+run_lifecycle_state_validation_fixture() (
+  export DAYFLOW_STATE_IN_PROGRESS_ID='fixture-in-progress'
+  export DAYFLOW_STATE_IN_REVIEW_ID='fixture-in-review'
+  export DAYFLOW_STATE_DONE_ID='fixture-done'
+  unset DAYFLOW_STATE_BLOCKED_ID
+  dayflow_linear_graphql() {
+    printf '%s\n' '{"data":{"team":{"states":{"nodes":[{"id":"fixture-in-progress","name":"In Progress"},{"id":"fixture-in-review","name":"In Review"},{"id":"fixture-done","name":"Done"}]}}}}'
+  }
+  ! dayflow_validate_lifecycle_states &&
+    [[ "$DAYFLOW_LIFECYCLE_CONFIGURATION_ERROR" == *'Blocked'* ]] &&
+    [[ "$DAYFLOW_LIFECYCLE_CONFIGURATION_ERROR" == *'before retrying'* ]]
+)
+assert_success 'missing Blocked fixture produces actionable lifecycle configuration error' run_lifecycle_state_validation_fixture
+
+run_rest_pr_mapping_fixture() (
+  dayflow_github_repo() { printf '%s\n' 'test/dayflow'; }
+  dayflow_gh() {
+    printf '%s\n' '[{"number":39,"html_url":"https://github.test/pr/39","draft":true,"state":"open","merged_at":null,"head":{"ref":"feature/tasks-39-rest","sha":"rest-head"},"base":{"ref":"develop"},"mergeable_state":"clean","body":"proof"}]'
+  }
+  local mapped
+  mapped="$(dayflow_pr_for_branch_rest feature/tasks-39-rest open)" &&
+    [[ "$(jq -r '.[0] | [.number,.url,.isDraft,.state,.headRefName,.headRefOid,.baseRefName,.mergeStateStatus] | @tsv' <<<"$mapped")" == $'39\thttps://github.test/pr/39\ttrue\tOPEN\tfeature/tasks-39-rest\trest-head\tdevelop\tCLEAN' ]]
+)
+assert_success 'REST PR fixture maps to deterministic runner shape' run_rest_pr_mapping_fixture
+
 assert_success 'first lock acquisition' dayflow_acquire_lock CEN-29
 assert_failure 'second lock acquisition must fail' dayflow_acquire_lock CEN-29
 dayflow_release_lock
