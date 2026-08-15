@@ -378,7 +378,7 @@ dayflow_supervisor_dispatch() {
 }
 
 dayflow_supervisor_cleanup_completed() {
-  local state_file issue_key worktree status branch status_json rc=0 fetched=false
+  local state_file issue_key worktree status branch status_json base_ref rc=0 fetched=false
   for state_file in "$DAYFLOW_STATE_ROOT"/CEN-*.json; do
     [[ -f "$state_file" ]] || continue
     issue_key="$(dayflow_issue_key_from_json_file "$state_file")" || continue
@@ -393,7 +393,32 @@ dayflow_supervisor_cleanup_completed() {
       rc=1
       continue
     }
+    [[ -n "$branch" ]] || {
+      dayflow_supervisor_error "$issue_key cleanup is missing the tracked branch"
+      rc=1
+      continue
+    }
+    if jq -e '.worktree_preservation.kind == "stacked-pr"' "$state_file" >/dev/null; then
+      continue
+    fi
     status_json="$(dayflow_status_issue "$issue_key")" || { rc=1; continue; }
+    if jq -e --arg branch "$branch" --arg done "$DAYFLOW_STATE_DONE_NAME" '
+      .pull_request.baseRefName as $base
+      | .linear_state == $done and .pull_request.state == "MERGED"
+        and .pull_request.headRefName == $branch
+        and ($base | type == "string" and length > 0) and $base != "develop"
+    ' >/dev/null <<<"$status_json"; then
+      base_ref="$(jq -r '.pull_request.baseRefName' <<<"$status_json")"
+      dayflow_state_update "$issue_key" --arg base "$base_ref" --arg at "$(dayflow_now_iso)" '
+        .worktree_preservation = {
+          kind: "stacked-pr",
+          reason: "merged PR targets a non-develop base",
+          base_ref: $base,
+          recorded_at: $at
+        }
+      '
+      continue
+    fi
     jq -e --arg branch "$branch" --arg done "$DAYFLOW_STATE_DONE_NAME" '
       .linear_state == $done and .pull_request.state == "MERGED"
       and .pull_request.baseRefName == "develop" and .pull_request.headRefName == $branch

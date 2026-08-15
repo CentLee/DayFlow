@@ -230,8 +230,12 @@ DAYFLOW_RUNTIME_DIR="$cleanup_root/runtime"
 DAYFLOW_WORKTREE_ROOT="$DAYFLOW_RUNTIME_DIR/worktrees"
 DAYFLOW_STATE_ROOT="$DAYFLOW_RUNTIME_DIR/state"
 DAYFLOW_LOG_ROOT="$DAYFLOW_RUNTIME_DIR/logs"
+DAYFLOW_SUPERVISOR_ROOT="$DAYFLOW_RUNTIME_DIR/supervisor"
+DAYFLOW_SUPERVISOR_CLAIM_ROOT="$DAYFLOW_SUPERVISOR_ROOT/claims"
+DAYFLOW_SUPERVISOR_LOCK_DIR="$DAYFLOW_SUPERVISOR_ROOT/once.lock"
+DAYFLOW_SUPERVISOR_SNAPSHOT="$DAYFLOW_SUPERVISOR_ROOT/queue.json"
 mkdir -p "$DAYFLOW_WORKTREE_ROOT" "$DAYFLOW_STATE_ROOT" "$DAYFLOW_LOG_ROOT"
-for cleanup_issue in CEN-28 CEN-62 CEN-63; do
+for cleanup_issue in CEN-28 CEN-35 CEN-62; do
   cleanup_branch="feature/tasks-${cleanup_issue#CEN-}-cleanup"
   git -C "$cleanup_seed" worktree add -b "$cleanup_branch" "$DAYFLOW_WORKTREE_ROOT/$cleanup_issue" develop >/dev/null
   jq -n --arg issue "$cleanup_issue" --arg branch "$cleanup_branch" --arg worktree "$DAYFLOW_WORKTREE_ROOT/$cleanup_issue" \
@@ -242,22 +246,45 @@ auxiliary_cleanup_issue=CEN-28-publication
 mkdir -p "$DAYFLOW_WORKTREE_ROOT/$auxiliary_cleanup_issue/.git"
 jq -n --arg issue CEN-28 --arg branch feature/tasks-28-publication --arg worktree "$DAYFLOW_WORKTREE_ROOT/$auxiliary_cleanup_issue" \
   '{issue:$issue,status:"done",branch:$branch,worktree:$worktree}' >"$DAYFLOW_STATE_ROOT/$auxiliary_cleanup_issue.json"
-printf '%s\n' dirty >"$DAYFLOW_WORKTREE_ROOT/CEN-63/untracked.txt"
 dayflow_status_issue() {
   local issue_key="$1"
-  local state_file branch
+  local state_file branch base_ref=develop
   printf '%s\n' "$issue_key" >>"$cleanup_status_log"
   state_file="$DAYFLOW_STATE_ROOT/$issue_key.json"
   branch="$(jq -r '.branch' "$state_file")"
-  jq -n --arg issue "$issue_key" --arg branch "$branch" --arg done "$DAYFLOW_STATE_DONE_NAME" \
-    '{issue:$issue,linear_state:$done,local:{},pull_request:{state:"MERGED",baseRefName:"develop",headRefName:$branch}}'
+  [[ "$issue_key" != "CEN-35" ]] || base_ref=integration/private-two-person-cutover
+  jq -n --arg issue "$issue_key" --arg branch "$branch" --arg base "$base_ref" --arg done "$DAYFLOW_STATE_DONE_NAME" \
+    '{issue:$issue,linear_state:$done,local:{},pull_request:{state:"MERGED",baseRefName:$base,headRefName:$branch}}'
 }
-assert_failure 'dirty completed worktree makes cleanup fail closed' dayflow_supervisor_cleanup_completed
+assert_success 'stacked and normal completed worktrees are classified safely' dayflow_supervisor_cleanup_completed
 assert_failure 'clean completed worktree removed non-forced' test -e "$DAYFLOW_WORKTREE_ROOT/CEN-62"
-assert_success 'dirty completed worktree preserved' test -e "$DAYFLOW_WORKTREE_ROOT/CEN-63/.git"
+assert_success 'merged non-develop worktree is preserved' test -e "$DAYFLOW_WORKTREE_ROOT/CEN-35/.git"
+assert_eq 'stacked-pr' "$(jq -r '.worktree_preservation.kind' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'stacked preservation is explicit'
+assert_eq 'integration/private-two-person-cutover' "$(jq -r '.worktree_preservation.base_ref' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'stacked base is retained for audit'
 assert_success 'CEN-28 is always preserved' test -e "$DAYFLOW_WORKTREE_ROOT/CEN-28/.git"
 assert_failure 'cleanup never checks auxiliary state against lifecycle services' rg -Fxq "$auxiliary_cleanup_issue" "$cleanup_status_log"
 assert_eq 'true' "$(jq -r '.worktree_cleaned' "$DAYFLOW_STATE_ROOT/CEN-62.json")" 'cleanup state proof persisted'
+
+stacked_cycle_fixture="$TEST_TMP/stacked-cycle-issues.json"
+stacked_cycle_log="$TEST_TMP/stacked-cycle-runner.log"
+printf '%s\n' '{"issues":[{"identifier":"CEN-35","title":"historical stacked delivery","description":"","priority":1,"state":"Done","blockers":[]},{"identifier":"CEN-64","title":"eligible next issue","description":"","priority":2,"state":"Todo","blockers":[]}]}' >"$stacked_cycle_fixture"
+DAYFLOW_SUPERVISOR_RUNNER_BIN="$TEST_DIR/fakes/supervisor_runner"
+DAYFLOW_SUPERVISOR_ISSUES_FILE="$stacked_cycle_fixture"
+FAKE_SUPERVISOR_RUNNER_LOG="$stacked_cycle_log"
+export DAYFLOW_SUPERVISOR_RUNNER_BIN DAYFLOW_SUPERVISOR_ISSUES_FILE FAKE_SUPERVISOR_RUNNER_LOG
+assert_success 'preserved stacked record does not block a supervisor cycle' /bin/bash -c 'source "$1/scripts/lib/dayflow_supervisor.sh"; dayflow_supervisor_once' _ "$SOURCE_ROOT"
+assert_file_contains "$stacked_cycle_log" '^reconcile$' 'supervisor reconciles before selecting past stacked record'
+assert_file_contains "$stacked_cycle_log" '^run CEN-64$' 'eligible Todo dispatches after stacked preservation'
+assert_success 'later supervisor cycle retains preserved stacked worktree' test -e "$DAYFLOW_WORKTREE_ROOT/CEN-35/.git"
+
+cleanup_issue=CEN-63
+cleanup_branch="feature/tasks-${cleanup_issue#CEN-}-cleanup"
+git -C "$cleanup_seed" worktree add -b "$cleanup_branch" "$DAYFLOW_WORKTREE_ROOT/$cleanup_issue" develop >/dev/null
+jq -n --arg issue "$cleanup_issue" --arg branch "$cleanup_branch" --arg worktree "$DAYFLOW_WORKTREE_ROOT/$cleanup_issue" \
+  '{issue:$issue,status:"done",branch:$branch,worktree:$worktree}' >"$DAYFLOW_STATE_ROOT/$cleanup_issue.json"
+printf '%s\n' dirty >"$DAYFLOW_WORKTREE_ROOT/CEN-63/untracked.txt"
+assert_failure 'dirty completed worktree makes cleanup fail closed' dayflow_supervisor_cleanup_completed
+assert_success 'dirty completed worktree preserved' test -e "$DAYFLOW_WORKTREE_ROOT/CEN-63/.git"
 assert_failure 'cleanup sends no Discord delivery' rg -q 'discord' "$FAKE_CURL_LOG"
 
 finish_tests 'dayflow_supervisor_test'

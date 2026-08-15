@@ -104,6 +104,10 @@ Enable GitHub's **Automatically delete head branches** repository setting for re
 
 The hosted job never deletes local `.dayflow` state or worktrees. Supervisor `once` and `cleanup` may remove only the exact owned worktree after runner status proves Linear `Done`, a merged PR into `develop` from the tracked branch, and a clean worktree. Cleanup fetches and prunes `origin/develop`, uses non-forced `git worktree remove`, records cleanup in local state, and never removes dirty workspaces or CEN-28. This preserves the CEN-28 migration exception and paused workspace.
 
+A local `done` record with a merged tracked PR whose base is not `develop` is a preserved stacked worktree, not a cleanup failure. Cleanup records `worktree_preservation.kind: stacked-pr` and the PR `base_ref`, leaves the worktree untouched, and continues the supervisor cycle; subsequent cleanup cycles skip the marker. This classification requires Linear `Done`, a merged PR, and an exact tracked head branch. An unmerged PR, a head mismatch, or missing proof does not qualify. No dirty worktree is removed; a dirty develop-delivery worktree remains a cleanup failure, while a verified stacked worktree remains behind its preservation marker for audit.
+
+Recovery is manual after auditing the recorded non-`develop` delivery chain. If that chain has not reached `develop`, retain the worktree and repair the chain outside cleanup. After proving the chain is delivered, verify the exact owned worktree is clean, remove it without force, and keep the local state record and preservation metadata as the audit trail.
+
 ## Recovery
 
 - Admission failure: fix the Linear metadata, return the issue to `Todo`, and rerun.
