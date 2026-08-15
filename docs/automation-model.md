@@ -75,7 +75,9 @@ Codex subprocesses receive no Linear, GitHub, or Discord credential variables. P
 
 `product-agent`, `integration-agent`, and `review-agent` use `gpt-5.6-sol/high`. `backend-agent` and `ios-agent` use `gpt-5.6-terra/medium`. There is no implicit fallback.
 
-The default execution sandbox is `workspace-write`, approval policy is `never`, and review is read-only. The aggregate issue token limit is 120K; prompt, command-output, no-progress, and wall-clock bounds are enforced by the runner. Supervisor dispatch inherits these per-issue limits and does not create a separate token budget. Breaches terminate the child process, preserve state, and block the issue.
+The default execution sandbox is `workspace-write`, approval policy is `never`, and review is read-only. Token policy has two aggregate issue limits: 120K uncached-input-plus-output tokens (`DAYFLOW_RESOURCE_TOKEN_LIMIT`) and 500K total context tokens including cached input (`DAYFLOW_CONTEXT_TOKEN_LIMIT`). The legacy `DAYFLOW_TOKEN_LIMIT` value supplies the resource limit only when the new setting is absent. Supervisor dispatch inherits these limits and does not create a separate budget.
+
+Primary, resume, and review execution all enforce a 32 KiB prompt cap before launch, then a 5 MiB captured command-output cap, a five-minute no-progress cap, and a 20-minute wall-clock cap. Repeated cumulative JSONL usage snapshots are reduced to one invocation total, including a final snapshot observed after process exit, and invocation totals are added once to issue state. `.usage` records cached input, uncached input, output, total tokens, and invocation count; `.token_budget` exposes the resource and total-context formulas, limits, and current use. A breach terminates the child process tree, preserves state, and blocks the issue with the runner guard's exact reason; it is never reclassified as model rejection.
 
 ## Reconciliation
 

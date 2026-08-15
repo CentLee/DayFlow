@@ -20,6 +20,100 @@ export FAKE_CODEX_REVIEW_COUNT_FILE="$TEST_TMP/review-count"
 export FAKE_CURL_LOG="$TEST_TMP/curl.log"
 # shellcheck source=scripts/lib/dayflow_runner.sh
 source "$ROOT_DIR/scripts/lib/dayflow_runner.sh"
+DAYFLOW_RESOURCE_TOKEN_LIMIT=120000
+DAYFLOW_CONTEXT_TOKEN_LIMIT=500000
+
+run_token_budget_focus() {
+  local prompt="$TEST_TMP/focus-prompt"
+  local output="$TEST_TMP/focus-output"
+  local usage_log="$TEST_TMP/focus-usage.jsonl"
+  mkdir -p "$DAYFLOW_STATE_ROOT" "$DAYFLOW_LOG_ROOT"
+  printf '%s\n' 'test' >"$prompt"
+  cat >"$usage_log" <<'EOF'
+{"usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10}}
+{"usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10}}
+{"event":{"usage":{"input_tokens":200,"cached_input_tokens":150,"output_tokens":20}}}
+EOF
+  assert_eq '220' "$(dayflow_jsonl_usage "$usage_log" | jq -r '.total_tokens')" 'focus cumulative snapshots counted once'
+
+  printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-35.json"
+  export FAKE_CODEX_MODE=late-usage
+  DAYFLOW_RESOURCE_TOKEN_LIMIT=1000
+  DAYFLOW_CONTEXT_TOKEN_LIMIT=1000
+  assert_success 'focus late usage execution' dayflow_execute_bounded CEN-35 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/focus-late.jsonl" "$output"
+  assert_eq '70' "$(jq -r '.token_budget.resource_used_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'focus resource usage persisted'
+  assert_eq '220' "$(jq -r '.token_budget.context_used_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'focus context usage persisted'
+
+  printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-38.json"
+  export FAKE_CODEX_MODE=success
+  assert_success 'focus first incremental invocation' dayflow_execute_bounded CEN-38 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/focus-incremental-1.jsonl" "$output"
+  assert_success 'focus second incremental invocation' dayflow_execute_bounded CEN-38 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/focus-incremental-2.jsonl" "$output"
+  assert_eq '2' "$(jq -r '.usage.invocations' "$DAYFLOW_STATE_ROOT/CEN-38.json")" 'focus invocations accumulated once each'
+  assert_eq '150' "$(jq -r '.usage.total_tokens' "$DAYFLOW_STATE_ROOT/CEN-38.json")" 'focus incremental totals accumulated'
+
+  printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-29.json"
+  export FAKE_CODEX_MODE=token-limit
+  DAYFLOW_RESOURCE_TOKEN_LIMIT=10
+  DAYFLOW_CONTEXT_TOKEN_LIMIT=1000
+  if dayflow_execute_bounded CEN-29 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/focus-resource.jsonl" "$output"; then
+    test_fail 'focus resource guard should fail'
+  fi
+  assert_eq 'uncached/output token limit exceeded (10)' "$DAYFLOW_EXECUTION_ERROR" 'focus resource guard reason'
+
+  printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-33.json"
+  export FAKE_CODEX_MODE=fast-overflow
+  DAYFLOW_RESOURCE_TOKEN_LIMIT=1000
+  DAYFLOW_CONTEXT_TOKEN_LIMIT=10
+  if dayflow_execute_bounded CEN-33 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/focus-context.jsonl" "$output"; then
+    test_fail 'focus context guard should fail'
+  fi
+  assert_eq 'total context token limit exceeded after process exit (10)' "$DAYFLOW_EXECUTION_ERROR" 'focus context guard reason'
+
+  printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-36.json"
+  printf '%040d\n' 0 >"$TEST_TMP/focus-oversized-prompt"
+  DAYFLOW_PROMPT_LIMIT_BYTES=16
+  export FAKE_CODEX_MODE=success
+  if dayflow_execute_bounded CEN-36 primary-new "$ROOT_DIR" fake-model medium '' "$TEST_TMP/focus-oversized-prompt" "$TEST_TMP/focus-prompt-limit.jsonl" "$output"; then
+    test_fail 'focus prompt guard should fail'
+  fi
+  assert_eq 'prompt limit exceeded (41/16 bytes)' "$DAYFLOW_EXECUTION_ERROR" 'focus prompt guard reason'
+  DAYFLOW_PROMPT_LIMIT_BYTES=32768
+
+  printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-37.json"
+  export FAKE_CODEX_MODE=output-limit
+  DAYFLOW_LOG_LIMIT_BYTES=512
+  DAYFLOW_RESOURCE_TOKEN_LIMIT=1000
+  DAYFLOW_CONTEXT_TOKEN_LIMIT=1000
+  if dayflow_execute_bounded CEN-37 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/focus-output-limit.jsonl" "$output"; then
+    test_fail 'focus command output guard should fail'
+  fi
+  assert_eq 'command output limit exceeded (512 bytes)' "$DAYFLOW_EXECUTION_ERROR" 'focus command output guard reason'
+  DAYFLOW_LOG_LIMIT_BYTES=5242880
+
+  printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-30.json"
+  export FAKE_CODEX_MODE=stall
+  DAYFLOW_STALL_LIMIT_SECONDS=1
+  DAYFLOW_EXECUTION_LIMIT_SECONDS=10
+  if dayflow_execute_bounded CEN-30 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/focus-stall.jsonl" "$output"; then
+    test_fail 'focus stall guard should fail'
+  fi
+  assert_eq 'no progress for 1s' "$DAYFLOW_EXECUTION_ERROR" 'focus stall guard reason'
+
+  printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-31.json"
+  export FAKE_CODEX_MODE=execution-limit
+  DAYFLOW_STALL_LIMIT_SECONDS=10
+  DAYFLOW_EXECUTION_LIMIT_SECONDS=1
+  if dayflow_execute_bounded CEN-31 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/focus-execution.jsonl" "$output"; then
+    test_fail 'focus execution guard should fail'
+  fi
+  assert_eq 'execution limit exceeded (1s)' "$DAYFLOW_EXECUTION_ERROR" 'focus execution guard reason'
+}
+
+if [[ "${DAYFLOW_UNIT_FOCUS:-}" == "token-budgets" ]]; then
+  run_token_budget_focus
+  finish_tests 'dayflow_runner_unit_test token-budgets'
+  exit 0
+fi
 
 mkdir -p "$DAYFLOW_LEGACY_RUNTIME_DIR/gh" "$DAYFLOW_LEGACY_RUNTIME_DIR/artifacts"
 printf '%s\n' 'legacy-auth' >"$DAYFLOW_LEGACY_RUNTIME_DIR/gh/hosts.yml"
@@ -245,42 +339,64 @@ output="$TEST_TMP/output"
 printf '%s\n' 'test' >"$prompt"
 
 export FAKE_CODEX_MODE=token-limit
-DAYFLOW_TOKEN_LIMIT=10
+DAYFLOW_RESOURCE_TOKEN_LIMIT=10
+DAYFLOW_CONTEXT_TOKEN_LIMIT=1000
 DAYFLOW_STALL_LIMIT_SECONDS=10
 DAYFLOW_EXECUTION_LIMIT_SECONDS=10
 DAYFLOW_MONITOR_INTERVAL_SECONDS=0.1
 if dayflow_execute_bounded CEN-29 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/token.jsonl" "$output"; then
   test_fail 'token limit execution should fail'
 fi
-assert_eq 'token limit exceeded (10)' "$DAYFLOW_EXECUTION_ERROR" 'token limit reason'
+assert_eq 'uncached/output token limit exceeded (10)' "$DAYFLOW_EXECUTION_ERROR" 'resource token limit reason'
 
 printf '%s\n' '{"tokens_used":10}' >"$DAYFLOW_STATE_ROOT/CEN-32.json"
 export FAKE_CODEX_INVOCATION_COUNT_FILE="$TEST_TMP/prelaunch-count"
 export FAKE_CODEX_MODE=success
-DAYFLOW_TOKEN_LIMIT=10
+DAYFLOW_RESOURCE_TOKEN_LIMIT=10
+DAYFLOW_CONTEXT_TOKEN_LIMIT=1000
 if dayflow_execute_bounded CEN-32 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/prelaunch.jsonl" "$output"; then
   test_fail 'exact prelaunch token cap should fail'
 fi
-assert_eq 'token limit reached before launch (10)' "$DAYFLOW_EXECUTION_ERROR" 'prelaunch token boundary'
+assert_eq 'uncached/output token limit reached before launch (10)' "$DAYFLOW_EXECUTION_ERROR" 'prelaunch resource token boundary'
 assert_failure 'prelaunch rejection must not invoke Codex' test -e "$FAKE_CODEX_INVOCATION_COUNT_FILE"
 
 printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-33.json"
 unset FAKE_CODEX_INVOCATION_COUNT_FILE
 export FAKE_CODEX_MODE=fast-overflow
+DAYFLOW_RESOURCE_TOKEN_LIMIT=1000
+DAYFLOW_CONTEXT_TOKEN_LIMIT=10
 if dayflow_execute_bounded CEN-33 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/fast-overflow.jsonl" "$output"; then
-  test_fail 'successful fast exit at token cap should fail'
+  test_fail 'successful fast exit at context cap should fail'
 fi
-assert_eq 'token limit exceeded after process exit (10)' "$DAYFLOW_EXECUTION_ERROR" 'post-wait token boundary'
+assert_eq 'total context token limit exceeded after process exit (10)' "$DAYFLOW_EXECUTION_ERROR" 'post-wait context token boundary'
 
 printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-35.json"
 export FAKE_CODEX_MODE=late-usage
-DAYFLOW_TOKEN_LIMIT=1000
+DAYFLOW_RESOURCE_TOKEN_LIMIT=1000
+DAYFLOW_CONTEXT_TOKEN_LIMIT=1000
 if ! dayflow_execute_bounded CEN-35 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/late.jsonl" "$output"; then
   test_fail 'late final usage should remain within the test limit'
 fi
 assert_eq '220' "$(jq -r '.tokens_used' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'late final usage persisted after process exit'
 assert_eq '150' "$(jq -r '.usage.cached_input_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'late cached usage persisted'
 assert_eq '50' "$(jq -r '.usage.uncached_input_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'late uncached usage persisted'
+assert_eq '20' "$(jq -r '.usage.output_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'late output usage persisted'
+assert_eq '220' "$(jq -r '.usage.total_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'late total usage persisted'
+assert_eq '70' "$(jq -r '.token_budget.resource_used_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'uncached/output budget basis persisted'
+assert_eq '220' "$(jq -r '.token_budget.context_used_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'total context budget basis persisted'
+
+printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-38.json"
+export FAKE_CODEX_MODE=success
+if ! dayflow_execute_bounded CEN-38 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/incremental-1.jsonl" "$output" ||
+   ! dayflow_execute_bounded CEN-38 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/incremental-2.jsonl" "$output"; then
+  test_fail 'incremental usage fixtures should complete'
+fi
+assert_eq '2' "$(jq -r '.usage.invocations' "$DAYFLOW_STATE_ROOT/CEN-38.json")" 'incremental invocations counted once each'
+assert_eq '100' "$(jq -r '.usage.uncached_input_tokens' "$DAYFLOW_STATE_ROOT/CEN-38.json")" 'incremental uncached input accumulated'
+assert_eq '50' "$(jq -r '.usage.output_tokens' "$DAYFLOW_STATE_ROOT/CEN-38.json")" 'incremental output accumulated'
+assert_eq '150' "$(jq -r '.usage.total_tokens' "$DAYFLOW_STATE_ROOT/CEN-38.json")" 'incremental total accumulated'
+assert_eq 'uncached_input_tokens + output_tokens' "$(jq -r '.token_budget.basis.resource' "$DAYFLOW_STATE_ROOT/CEN-38.json")" 'resource budget basis exposed'
+assert_eq 'total_tokens (cached + uncached input + output)' "$(jq -r '.token_budget.basis.context' "$DAYFLOW_STATE_ROOT/CEN-38.json")" 'context budget basis exposed'
 
 printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-36.json"
 oversized_prompt="$TEST_TMP/oversized-prompt"
@@ -305,7 +421,8 @@ DAYFLOW_LOG_LIMIT_BYTES=5242880
 
 printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-30.json"
 export FAKE_CODEX_MODE=stall
-DAYFLOW_TOKEN_LIMIT=1000
+DAYFLOW_RESOURCE_TOKEN_LIMIT=1000
+DAYFLOW_CONTEXT_TOKEN_LIMIT=1000
 DAYFLOW_STALL_LIMIT_SECONDS=1
 DAYFLOW_EXECUTION_LIMIT_SECONDS=10
 if dayflow_execute_bounded CEN-30 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/stall.jsonl" "$output"; then
@@ -326,7 +443,8 @@ printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-34.json"
 export FAKE_CODEX_MODE=spawn-child
 export FAKE_CODEX_PARENT_PID_FILE="$TEST_TMP/codex-parent.pid"
 export FAKE_CODEX_CHILD_PID_FILE="$TEST_TMP/codex-child.pid"
-DAYFLOW_TOKEN_LIMIT=1000
+DAYFLOW_RESOURCE_TOKEN_LIMIT=1000
+DAYFLOW_CONTEXT_TOKEN_LIMIT=1000
 DAYFLOW_STALL_LIMIT_SECONDS=30
 DAYFLOW_EXECUTION_LIMIT_SECONDS=30
 (
