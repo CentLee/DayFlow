@@ -101,7 +101,9 @@ A definite non-2xx Discord response changes the claim to `retryable` and fails t
 
 The repository setting **Settings > General > Pull Requests > Automatically delete head branches** owns remote feature-branch deletion. The workflow relies only on the immutable event payload and the merged base branch, so deletion may happen before reconciliation without losing the `CEN-N` mapping. The workflow never calls the Git ref deletion API.
 
-GitHub-hosted reconciliation does not access `.dayflow/` and never removes a local worktree. Local supervisor reconciliation and cleanup are deliberately ordered before queue selection so merged blockers can release dependent work. Cleanup fetches/prunes and removes only an exact owned worktree after runner status proves `Done`, the tracked PR is merged into `develop`, and the worktree is clean. Dirty workspaces are preserved, and CEN-28 is always excluded from supervisor cleanup.
+GitHub-hosted reconciliation does not access `.dayflow/` and never removes a local worktree. Local supervisor reconciliation and cleanup are deliberately ordered before queue selection so merged blockers can release dependent work. Cleanup fetches/prunes and removes only an exact owned worktree after runner status proves `Done`, the tracked PR is merged into `develop`, and the worktree is clean. A local `done` record whose tracked PR is merged from the recorded branch into a non-`develop` base is instead marked with `worktree_preservation.kind: stacked-pr`; cleanup skips that marker on later cycles and continues queue selection. Dirty workspaces are preserved as failures, and CEN-28 is always excluded from supervisor cleanup.
+
+The stacked marker is an audit boundary, not proof that the delivery reached `develop`. To recover the workspace, first audit the recorded `base_ref` delivery chain through `develop`. If the chain is incomplete, retain the worktree and repair the chain outside supervisor cleanup. Once the chain is proven delivered, verify the exact owned worktree is clean, remove it non-forced, and retain the local record and preservation metadata as the audit trail.
 
 ## Repository Truth
 
