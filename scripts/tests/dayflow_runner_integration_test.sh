@@ -571,6 +571,28 @@ run_model_rejection_test() {
   rm -rf "$test_root"
 }
 
+run_late_context_success_test() {
+  local test_root seed state_file
+  test_root="$(mktemp -d)"
+  seed="$(dayflow_create_test_repo "$test_root" "$SOURCE_ROOT")"
+  dayflow_export_fake_environment "$test_root" "$SOURCE_ROOT" "$seed"
+  dayflow_prepare_notification_fixture
+  export FAKE_CODEX_MODE=late-context-success
+  export FAKE_REVIEW_MODE=clean
+  export DAYFLOW_RESOURCE_TOKEN_LIMIT=1000
+  export DAYFLOW_CONTEXT_TOKEN_LIMIT=100
+
+  "$SOURCE_ROOT/scripts/dayflow_runner.sh" run CEN-29 >/dev/null
+  state_file="$DAYFLOW_STATE_ROOT/CEN-29.json"
+  assert_eq 'merge-ready' "$(jq -r '.status' "$state_file")" 'late context success completes the integration lifecycle'
+  assert_eq 'over-threshold' "$(jq -r '.context_observation.status' "$state_file")" 'late context integration observation persisted'
+  assert_eq '100' "$(jq -r '.context_observation.context_threshold_tokens' "$state_file")" 'late context integration threshold persisted'
+  assert_success 'late context integration records resume or subsequent-launch warning' \
+    test "$(jq -r '.context_observation.observation_count' "$state_file")" -ge 2
+  assert_file_contains "$state_file" 'resource limit remains authoritative' 'late context integration reason is operator-facing'
+  rm -rf "$test_root"
+}
+
 run_runner_guard_classification_case() (
   local guard="$1"
   local expected_reason="$2"
@@ -590,9 +612,6 @@ run_runner_guard_classification_case() (
     resource-token)
       export FAKE_CODEX_MODE=token-limit DAYFLOW_RESOURCE_TOKEN_LIMIT=10
       ;;
-    context-token)
-      export FAKE_CODEX_MODE=token-limit DAYFLOW_CONTEXT_TOKEN_LIMIT=10
-      ;;
     command-output)
       export FAKE_CODEX_MODE=output-limit DAYFLOW_LOG_LIMIT_BYTES=512
       ;;
@@ -601,6 +620,9 @@ run_runner_guard_classification_case() (
       ;;
     timeout)
       export FAKE_CODEX_MODE=execution-limit DAYFLOW_EXECUTION_LIMIT_SECONDS=1
+      ;;
+    codex-failure)
+      export FAKE_CODEX_MODE=codex-failure
       ;;
     *)
       test_fail "unknown runner guard fixture: $guard"
@@ -619,10 +641,10 @@ run_runner_guard_classification_case() (
 
 run_runner_guard_classification_test() {
   run_runner_guard_classification_case resource-token 'uncached/output token limit exceeded (10)'
-  run_runner_guard_classification_case context-token 'total context token limit exceeded (10)'
   run_runner_guard_classification_case command-output 'command output limit exceeded (512 bytes)'
   run_runner_guard_classification_case stall 'no progress for 1s'
   run_runner_guard_classification_case timeout 'execution limit exceeded (1s)'
+  run_runner_guard_classification_case codex-failure 'Codex exited with status 42'
 }
 
 run_publication_recovery_preflight_preservation_test() {
@@ -790,6 +812,8 @@ elif [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "owned-recovery-gates" ]]; then
   run_owned_recovery_gate_case review-changes preflight
   run_owned_recovery_gate_case review-changes linear
 elif [[ "${DAYFLOW_INTEGRATION_FOCUS:-}" == "runner-guards" ]]; then
+  run_late_context_success_test
+  run_model_rejection_test
   run_runner_guard_classification_test
 else
   run_commit_then_push_recovery_test
@@ -811,6 +835,7 @@ else
   run_review_remediation_test
   run_publication_preflight_failure_test
   run_model_rejection_test
+  run_late_context_success_test
   run_delivery_integrity_test
   run_review_execution_failure_draft_test
   run_start_transition_failure_test
