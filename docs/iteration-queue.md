@@ -1,256 +1,278 @@
-# DayFlow Iteration Queue
+# DayFlow Delivery Queue
 
-This is the CEN-33 replacement queue. Create the listed Linear issues in order;
-an issue is eligible only when every declared dependency is Done. Dispatch is
-sequential unless an item explicitly says `Parallel Safe: yes`; none below does.
+This queue was rebased by CEN-43 after the fixed two-person topology and local
+runner stabilization work. It separates completed Linear history from future
+delivery work. A completed `CEN-*` identifier is historical and must never be
+reused, reopened, or treated as the identifier for a future task.
 
-The Excel workbook is a read-only product-design reference for the monthly
-board interaction and KPI formulas. It is not an application input or delivery
-artifact for any issue in this queue.
+The product baseline remains fixed: one owner, one partner, two allowlisted
+Google identities, one personal calendar each, one household calendar,
+owner-only budget data, and private iMac access through Tailscale MagicDNS.
+Google Calendar sync, generic invitations, arbitrary membership, and public
+ingress are not delivery-queue options.
 
-## Legacy CEN-24--CEN-27 Disposition
+The Excel workbook remains a read-only product-design reference for the
+monthly board interaction and KPI formulas. It is not an application input or
+a delivery artifact.
 
-| Legacy issue | Disposition | Replacement mapping |
-| --- | --- | --- |
-| CEN-24 | Supersede | CEN-34 establishes the runner-model policy needed to execute the replacement cutover safely. |
-| CEN-25 | Supersede | CEN-35 through CEN-37 replace the topology, private deployment, and authentication cutover work with the fixed two-person scope. |
-| CEN-26 | Supersede | CEN-38 replaces its calendar and budget work with explicit fixed-boundary enforcement. |
-| CEN-27 | Cancel | Invite, arbitrary shared-calendar, and public onboarding work conflict with the target scope. |
+## Completed Linear History
 
-## Dependency-Ordered Queue
+The following identifiers are closed history, not available queue slots:
 
-### CEN-34 — [Integration] Terra runner model policy
+| Linear issue | Completed scope |
+| --- | --- |
+| CEN-34 | Aligned the local runner with the Terra policy and established the cutover execution base. |
+| CEN-35 | Implemented the fixed two-person data topology and migration safety. |
+| CEN-36 | Corrected cached-context accounting in the runner. |
+| CEN-37 | Prevented finalized lifecycle records from being dispatched again. |
+| CEN-38 | Excluded auxiliary state artifacts from issue execution. |
+| CEN-39 | Hardened runner publication admission. |
+| CEN-40 | Bounded runner token budgets. |
+| CEN-41 | Preserved stacked completed worktrees. |
+| CEN-42 | Made context-budget observations non-blocking. |
 
+CEN-43 is the product queue rebase represented by this document. It is not a
+replacement identifier for the old cutover brief.
+
+The prior CEN-24 through CEN-27 plan remains superseded or cancelled. Its
+private deployment, authentication, calendar, budget, offline, and cutover
+intent is represented only by the future briefs below; its public onboarding,
+generic invitation, and arbitrary sharing intent remains cancelled.
+
+## Future Identifier and Admission Rule
+
+`DQ-01` through `DQ-08` are stable document keys, not Linear identifiers. For
+each brief:
+
+1. Create the earliest uncreated eligible brief in Linear and let Linear assign
+   a new, unique `CEN-*` identifier. Never predict, renumber, or recycle an ID.
+2. Copy the brief's goal, inputs, acceptance criteria, exclusions, ownership,
+   and write scope into the created task. Translate any `DQ-*` dependency to
+   the actual Linear identifier assigned when that predecessor was created.
+3. Record the assigned identifier beside the document key during the next
+   queue-maintenance change. The document key remains stable even after the
+   mapping is recorded.
+4. Admit work only when every listed dependency is Done. Execution is
+   sequential; every brief below has `Parallel Safe: no`.
+
+This rule gives every future task a unique Linear identity without borrowing a
+completed identifier or guessing which identifier Linear will assign.
+
+## Dependency-Ordered Future Delivery
+
+### DQ-01 — [Integration] private iMac/Tailscale deployment
+
+- Linear ID: assigned at creation
+- Goal: make the completed CEN-35 two-person topology operable on the owner's
+  iMac as a private, recoverable service reached only over the tailnet.
 - Primary Agent: `integration-agent`
 - Inputs:
-  - `docs/product-spec.md`
-  - `docs/local-runner.md`
-  - `docs/automation-model.md`
-  - `docs/iteration-queue.md`
-- Done When:
-  - the local Terra runner policy assigns the smallest valid agent scope and sequential dependency admission for CEN-35 through CEN-43
-  - the policy records the required proof-of-work, test, privacy, and deployment-evidence handoffs for backend, iOS, integration, and review work
-  - runner configuration does not create a resident service, public control plane, public ingress, or hosted-only dependency
-  - the policy identifies Tailscale/iMac verification, backup/runbook evidence, and two-role privacy checks as required cutover gates
-- Out of Scope:
-  - application feature implementation
-  - deployment changes or external service provisioning
-- Execution Mode: Sequential
-- Parallel Safe: no
-- Write Scope:
-  - `.codex/agents/**`
-  - `.codex/skills/**`
-  - `docs/local-runner.md`
-  - `docs/automation-model.md`
-- Dependencies: none
-
-### CEN-35 — [Backend] fixed two-person data topology
-
-- Primary Agent: `backend-agent`
-- Inputs:
+  - completed CEN-35 topology and migration behavior
+  - completed CEN-43 queue rebase
   - `docs/product-spec.md`
   - `docs/domain-model.md`
-  - existing PostgreSQL schema and migrations
-  - completed CEN-34 runner policy
-- Done When:
-  - deployment configuration requires exactly one owner and one partner Google subject with normalized-email guard
-  - migration preserves the two mapped user IDs and their personal calendars
-  - one household calendar is provisioned and both mapped users are editors
-  - owner expense-book data is retained and non-owner budget data is exported or quarantined for operator review
-  - migration tests prove invalid or incomplete owner/partner topology leaves existing data unchanged and blocks deployment readiness
-- Out of Scope:
-  - Google token exchange endpoint
-  - iOS UI, offline behavior, or Tailscale host setup
-- Execution Mode: Sequential
-- Parallel Safe: no
-- Write Scope:
-  - `services/api/migrations/**`
-  - `services/api/internal/**`
-  - `services/api/**/*_test.go`
-- Dependencies: CEN-34
-
-### CEN-36 — [Integration] private Tailscale/iMac deployment
-
-- Primary Agent: `integration-agent`
-- Inputs:
-  - `docs/product-spec.md`
   - `docs/api-contract.md`
   - `docs/local-runner.md`
-  - completed CEN-35 topology migration
 - Done When:
-  - iMac Docker Compose service lifecycle, including durable restart policy, is configured and verified
-  - the API is configured on the iMac's Tailscale MagicDNS name and is not publicly exposed
-  - deployment verification confirms no router port forwarding, public DNS, reverse proxy, tunnel, or other public ingress is required or enabled
-  - an iPhone connected to the tailnet verifies the private API path to the iMac
-  - backup, restore, and health checks are exercised, and an operator runbook records deployment, recovery, and verification steps
+  - the API and PostgreSQL have an iMac deployment configuration with durable
+    storage, deterministic start/restart behavior, and secrets kept outside
+    version control
+  - the API is reachable from an allowlisted iPhone at the configured HTTPS
+    Tailscale MagicDNS base URL, while PostgreSQL remains reachable only by the
+    API
+  - verification shows that no router port forwarding, public DNS, Funnel,
+    internet-facing listener, public reverse proxy, or other public ingress is
+    configured or required
+  - deployment readiness rejects any configuration that does not contain
+    exactly one owner and one partner Google subject with their normalized
+    email guards
+  - backup and restore are exercised against the deployed database, service
+    health is verified after restart, and an operator runbook records setup,
+    update, recovery, and private-connectivity checks
+  - focused deployment tests or repeatable verification scripts cover service
+    lifecycle, private reachability, absence of public exposure, and recovery
 - Out of Scope:
-  - Google identity exchange implementation
-  - iOS authentication UI or offline client behavior
+  - Google ID-token exchange or iOS authentication implementation
+  - Google Calendar scopes, tokens, data access, or synchronization
+  - registration, generic invitations, invite acceptance, arbitrary users,
+    membership administration, or role management
+  - purchased domains, public ingress, Tailscale Funnel, hosted-only
+    infrastructure, or Kubernetes
+  - iOS offline cache or mutation replay
 - Execution Mode: Sequential
 - Parallel Safe: no
 - Write Scope:
   - `deploy/**`
+  - deployment-focused configuration and verification scripts
   - `docs/operator-runbook.md`
-  - deployment verification evidence only
-- Dependencies: CEN-35
+- Dependencies: CEN-35, CEN-43
 
-### CEN-37 — [Backend] Google ID-token exchange and legacy auth retirement
+### DQ-02 — [Backend] Google identity exchange and legacy auth retirement
 
+- Linear ID: assigned at creation
 - Primary Agent: `backend-agent`
-- Inputs:
-  - `docs/api-contract.md`
-  - `docs/domain-model.md`
-  - completed CEN-35 topology migration and CEN-36 private deployment
 - Done When:
-  - `POST /v1/auth/google/exchange` validates issuer, audience, signature, expiry, verified email, subject, and email guard
-  - only the two configured subjects receive revocable opaque DayFlow sessions
-  - no Google access or refresh token is persisted and no Google Calendar scope is requested
-  - password/register/login and invite-acceptance routes are removed or disabled as migration targets
-  - endpoint tests cover allowlisted, mismatched, malformed, expired, and unready deployments
+  - `POST /v1/auth/google/exchange` validates the Google ID token and maps only
+    the two configured subjects to revocable DayFlow sessions
+  - Google access and refresh tokens are never requested or persisted
+  - password registration/login and invite-acceptance endpoints are removed or
+    disabled as migration targets
+  - tests cover owner, partner, non-allowlisted, mismatched-email, invalid,
+    expired, and deployment-not-ready exchanges
 - Out of Scope:
-  - iOS Google Sign-In UI
-  - calendar or budget synchronization
+  - Google Calendar access or synchronization
+  - iOS authentication UI
+  - new users, invitations, memberships, or roles
+- Primary Inputs: `docs/domain-model.md`, `docs/api-contract.md`
 - Execution Mode: Sequential
 - Parallel Safe: no
-- Write Scope:
-  - `services/api/**`
-- Dependencies: CEN-35, CEN-36
+- Write Scope: `services/api/**`
+- Dependencies: CEN-35, DQ-01
 
-### CEN-38 — [Backend] fixed calendar and owner-budget boundary
+### DQ-03 — [Backend] fixed calendar and owner-budget boundary
 
+- Linear ID: assigned at creation
 - Primary Agent: `backend-agent`
-- Inputs:
-  - `docs/domain-model.md`
-  - `docs/api-contract.md`
-  - completed CEN-37 authentication behavior
 - Done When:
-  - calendar list returns only the caller's personal calendar plus the pre-provisioned household calendar
-  - event CRUD and explicit personal-to-household copy/move enforce the fixed topology
-  - owner budget endpoints authorize before resolving or serializing budget data
-  - calendar, invite, membership-creation, and role-management endpoints are absent
-  - integration tests prove the partner cannot address owner budget or either person's other personal calendar
-- Out of Scope:
-  - iOS screens
-  - offline cursor and outbox protocol
+  - calendar and event endpoints expose only the caller's personal calendar and
+    the provisioned household calendar
+  - explicit personal-to-household copy and move preserve the privacy and
+    atomicity rules in the API contract
+  - owner budget endpoints authorize before resolving or serializing data
+  - calendar creation, invite, membership, and role-management endpoints are
+    absent
+  - integration tests prove the partner cannot address owner budget data or
+    either person's other personal calendar
+- Out of Scope: iOS screens, offline cursor/outbox behavior, new product scope
+- Primary Inputs: `docs/domain-model.md`, `docs/api-contract.md`
+- Execution Mode: Sequential
+- Parallel Safe: no
+- Write Scope: `services/api/**`
+- Dependencies: DQ-02
+
+### DQ-04 — [Backend] idempotent offline and change-feed contract
+
+- Linear ID: assigned at creation
+- Primary Agent: `backend-agent`
+- Done When:
+  - supported event and owner-budget writes accept stable mutation IDs and the
+    contract-required base versions
+  - retries are idempotent and stale writes return explicit `409 conflict`
+    responses with current authorized state
+  - `/v1/sync/changes` returns authorized changes and tombstones by cursor
+  - partner responses contain no budget data, identifiers, or placeholders
+  - contract tests cover replay, conflict, deletion, explicit copy/move, and
+    owner-only budget isolation
+- Out of Scope: SwiftUI cache implementation, push, real-time collaboration
+- Primary Inputs: `docs/api-contract.md`, `docs/sync-model.md`
 - Execution Mode: Sequential
 - Parallel Safe: no
 - Write Scope:
   - `services/api/**`
-- Dependencies: CEN-37
+  - only consistency corrections required by implementation in
+    `docs/api-contract.md` or `docs/sync-model.md`
+- Dependencies: DQ-03
 
-### CEN-39 — [Integration] offline contract
+### DQ-05 — [iOS] private Google auth and role-gated bootstrap
 
-- Primary Agent: `integration-agent`
-- Inputs:
-  - `docs/api-contract.md`
-  - `docs/sync-model.md`
-  - completed CEN-38 API behavior
-- Done When:
-  - event and owner-budget writes accept stable client mutation IDs and required base versions
-  - repeated mutations are idempotent and stale writes return current resources with `409 conflict`
-  - authorized `/v1/sync/changes` cursors include event tombstones and owner-only budget changes
-  - partner feeds and caches contain no budget data, identifiers, or placeholders
-  - contract tests cover offline replay, move atomicity, deletion tombstones, and budget conflict handling
-- Out of Scope:
-  - SwiftUI cache implementation
-  - push or real-time collaboration
-- Execution Mode: Sequential
-- Parallel Safe: no
-- Write Scope:
-  - `services/api/**`
-  - `docs/api-contract.md`
-  - `docs/sync-model.md`
-- Dependencies: CEN-38
-
-### CEN-40 — [iOS] Google auth/bootstrap
-
+- Linear ID: assigned at creation
 - Primary Agent: `ios-agent`
-- Inputs:
-  - `docs/ios-architecture.md`
-  - `docs/api-contract.md`
-  - completed CEN-36 private deployment and CEN-37 authentication behavior
 - Done When:
-  - app exchanges Google ID tokens only with the configured Tailscale MagicDNS API endpoint
-  - owner and partner bootstrap render their correct tab sets and calendar scopes
-  - legacy password/register/invite/public-endpoint UI and configuration are removed
-  - unauthorized, expired-session, and unreachable-iMac states are visible
-  - iOS tests cover owner/partner routing and no partner budget request
-- Out of Scope:
-  - offline mutation replay
-  - calendar editor polish
+  - the app exchanges a Google ID token only with the configured HTTPS
+    Tailscale MagicDNS API endpoint and stores only the DayFlow session
+  - owner and partner bootstrap render the correct tabs, calendar scope, and
+    budget-access boundary
+  - password, registration, invite, and public-endpoint UI/configuration are
+    absent
+  - unauthorized identity, expired session, and unreachable iMac states are
+    visible and tested
+- Out of Scope: offline mutation replay, Google Calendar access, onboarding
+- Primary Inputs: `docs/ios-architecture.md`, `docs/api-contract.md`
 - Execution Mode: Sequential
 - Parallel Safe: no
 - Write Scope:
   - `apps/ios/DayFlow/**`
   - `apps/ios/DayFlowTests/**`
-- Dependencies: CEN-36, CEN-37
+- Dependencies: DQ-01, DQ-02, DQ-03
 
-### CEN-41 — [iOS] offline cache/explicit transfer
+### DQ-06 — [iOS] identity-partitioned offline cache and replay
 
+- Linear ID: assigned at creation
 - Primary Agent: `ios-agent`
-- Inputs:
-  - `docs/ios-architecture.md`
-  - `docs/sync-model.md`
-  - completed CEN-39 offline contract and CEN-40 bootstrap
 - Done When:
-  - cache, cursor, and outbox are partitioned by DayFlow identity and cleared on sign-out or account change
-  - calendar events render from confirmed cache with visibly pending overlays while the iMac is unavailable
-  - client replays idempotent mutations and exposes explicit event/budget conflict resolution
-  - personal events can only be copied or moved explicitly to the household calendar
-  - partner build has no budget cache, outbox, request path, or UI
-- Out of Scope:
-  - additional calendar types or membership UI
-  - Google Calendar synchronization
+  - cache, cursor, session, and outbox state are partitioned by identity and
+    cleared on sign-out or account change
+  - confirmed calendar data remains usable with visible pending overlays while
+    the iMac is unavailable
+  - mutations replay idempotently and conflicts require explicit user action
+  - copy/move is limited to personal-to-household transfer
+  - the partner has no budget DTO, request path, cache, outbox, or UI
+- Out of Scope: Google Calendar sync, new calendar types, membership UI
+- Primary Inputs: `docs/ios-architecture.md`, `docs/sync-model.md`
 - Execution Mode: Sequential
 - Parallel Safe: no
 - Write Scope:
   - `apps/ios/DayFlow/**`
   - `apps/ios/DayFlowTests/**`
-- Dependencies: CEN-39, CEN-40
+- Dependencies: DQ-04, DQ-05
 
-### CEN-42 — [Integration] private two-role system E2E
+### DQ-07 — [Integration] private two-role system E2E
 
+- Linear ID: assigned at creation
 - Primary Agent: `integration-agent`
-- Inputs:
-  - completed CEN-35 through CEN-41 work
+- Done When:
+  - owner and partner flows pass end to end on the two supported iPhones, an
+    iOS Simulator where practical, and the iMac-hosted API over Tailscale
+  - evidence proves MagicDNS-only remote transport and no public ingress
+  - evidence covers personal/household calendar isolation, explicit copy/move,
+    owner-only budget data, and absence of partner budget state
+  - offline pending edits, reconnection replay, conflicts, identity cleanup,
+    restart, backup, restore, and health verification are exercised
+- Out of Scope: public beta, external identities, public network testing,
+  Google Calendar synchronization, or new features
+- Primary Inputs:
   - `docs/product-spec.md`
+  - `docs/api-contract.md`
+  - `docs/ios-architecture.md`
+  - `docs/sync-model.md`
   - `docs/review-checklist.md`
   - `docs/operator-runbook.md`
-- Done When:
-  - owner and partner flows pass end-to-end on an iPhone, iOS Simulator, and the iMac-hosted service over Tailscale
-  - evidence shows the iPhone and Simulator use the iMac's MagicDNS API path with no public ingress
-  - evidence verifies private and household calendar boundaries, explicit copy/move, owner-only budget isolation, and no partner budget cache or request
-  - evidence verifies offline pending edits, reconnection replay, conflict handling, and identity-cache clearing for both roles
-  - backup/restore, health-check, and operator-runbook recovery evidence is current for the private deployment
-- Out of Scope:
-  - public beta, external users, or public network testing
-  - new product scope
 - Execution Mode: Sequential
 - Parallel Safe: no
 - Write Scope:
   - integration test harnesses and fixtures
   - deployment verification evidence
   - `docs/operator-runbook.md`
-- Dependencies: CEN-35, CEN-36, CEN-37, CEN-38, CEN-39, CEN-40, CEN-41
+- Dependencies: DQ-01, DQ-03, DQ-06
 
-### CEN-43 — [Review] cutover
+### DQ-08 — [Review] private cutover readiness
 
+- Linear ID: assigned at creation
 - Primary Agent: `review-agent`
-- Inputs:
-  - completed CEN-34 through CEN-42 PRs
-  - `docs/review-checklist.md`
-  - CEN-42 private-system evidence
 - Done When:
-  - review verifies exactly two Google identities, private MagicDNS-only transport, and no Google Calendar synchronization
-  - review verifies no public ingress and includes tested backup, restore, health-check, and operator-runbook evidence
-  - review verifies personal/household calendar boundaries, explicit copy/move, and owner-only budget data online and offline
-  - review verifies iPhone, Simulator, and iMac Tailscale evidence for both roles
-  - legacy password/register/login/invite/public-ingress code paths are removed or explicitly tracked as merge blockers
-- Out of Scope:
-  - feature implementation
-  - new product scope
+  - review verifies exactly two Google identities, private MagicDNS-only
+    transport, and no Google Calendar synchronization or public ingress
+  - review verifies personal/household calendar boundaries, explicit copy/move,
+    and owner-only budget data online and offline
+  - iPhone, Simulator, iMac, restart, backup, restore, health, and recovery
+    evidence satisfies the review checklist
+  - legacy password, registration, login, invite, arbitrary membership, and
+    public-ingress paths are removed or recorded as merge blockers
+- Out of Scope: implementation, new product scope, or lifecycle automation
+- Primary Inputs:
+  - DQ-07 system evidence
+  - `docs/review-checklist.md`
+  - `docs/operator-runbook.md`
 - Execution Mode: Sequential
 - Parallel Safe: no
-- Write Scope:
-  - review comments and PR evidence only
-- Dependencies: CEN-42
+- Write Scope: review findings and readiness evidence only
+- Dependencies: DQ-07
+
+## Immediate Linear Task-Creation Handoff
+
+Immediately after CEN-43 merges and is Done, create DQ-01, titled
+`[Integration] private iMac/Tailscale deployment`. Let Linear assign its new
+identifier, set CEN-35 and CEN-43 as completed blockers, use
+`integration-agent`, and mark it sequential and not parallel-safe. Copy the
+DQ-01 brief without adding public ingress, Google Calendar synchronization,
+generic invitation, or application-feature scope.
