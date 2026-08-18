@@ -54,6 +54,10 @@ dayflow_error() {
   printf 'dayflow-runner: %s\n' "$*" >&2
 }
 
+dayflow_warn() {
+  printf 'dayflow-runner: warning: %s\n' "$*" >&2
+}
+
 dayflow_require_commands() {
   local command_name
   for command_name in "$@"; do
@@ -954,6 +958,39 @@ dayflow_record_token_budget() {
        }'
 }
 
+dayflow_record_context_observation() {
+  local issue_key="$1"
+  local context_used_tokens="$2"
+  local phase="$3"
+  local reason observed_at
+  if (( context_used_tokens < DAYFLOW_CONTEXT_TOKEN_LIMIT )); then
+    return 0
+  fi
+
+  reason="total context usage ${context_used_tokens} reached or exceeded observation threshold ${DAYFLOW_CONTEXT_TOKEN_LIMIT} during ${phase}; uncached-input-plus-output resource limit remains authoritative"
+  observed_at="$(dayflow_now_iso)"
+  dayflow_state_update "$issue_key" \
+    --arg reason "$reason" \
+    --arg phase "$phase" \
+    --arg at "$observed_at" \
+    --argjson used "$context_used_tokens" \
+    --argjson threshold "$DAYFLOW_CONTEXT_TOKEN_LIMIT" \
+    '(.context_observation // {}) as $existing
+     | .context_observation = {
+         status: "over-threshold",
+         reason: $reason,
+         context_used_tokens: $used,
+         context_threshold_tokens: $threshold,
+         first_observed_at: ($existing.first_observed_at // $at),
+         first_phase: ($existing.first_phase // $phase),
+         last_observed_at: $at,
+         last_phase: $phase,
+         observation_count: (($existing.observation_count // 0) + 1)
+       }
+     | .updated_at = $at'
+  dayflow_warn "$issue_key $reason"
+}
+
 dayflow_jsonl_session_id() {
   local log_file="$1"
   jq -R -sr 'split("\n") | map(fromjson? // empty) | [.[] | select(.type == "thread.started" or .type == "thread_started") | (.thread_id // .threadId // .id)] | map(select(. != null)) | first // empty' "$log_file" 2>/dev/null
@@ -1071,10 +1108,13 @@ dayflow_execute_bounded() {
   local output_file="$9"
   local started_at now last_progress last_size=0 size elapsed pid rc=0 limit_reason=""
   local prompt_size invocation_usage input_tokens cached_input_tokens uncached_input_tokens output_tokens invocation_context_tokens invocation_resource_tokens
-  local aggregate_context_tokens aggregate_resource_tokens
+  local aggregate_context_tokens aggregate_resource_tokens context_observed_inflight=false
   local restore_job_control=false
 
   dayflow_record_token_budget "$issue_key"
+  aggregate_resource_tokens="$(dayflow_state_value "$issue_key" '.token_budget.resource_used_tokens // 0' 2>/dev/null || printf '0')"
+  aggregate_context_tokens="$(dayflow_state_value "$issue_key" '.token_budget.context_used_tokens // 0' 2>/dev/null || printf '0')"
+  dayflow_record_context_observation "$issue_key" "$aggregate_context_tokens" "before ${mode} launch"
   prompt_size="$(wc -c <"$prompt_file" | tr -d ' ')"
   if (( prompt_size > DAYFLOW_PROMPT_LIMIT_BYTES )); then
     DAYFLOW_EXECUTION_ERROR="prompt limit exceeded (${prompt_size}/${DAYFLOW_PROMPT_LIMIT_BYTES} bytes)"
@@ -1082,19 +1122,11 @@ dayflow_execute_bounded() {
     return 124
   fi
 
-  aggregate_resource_tokens="$(dayflow_state_value "$issue_key" '.token_budget.resource_used_tokens // 0' 2>/dev/null || printf '0')"
-  aggregate_context_tokens="$(dayflow_state_value "$issue_key" '.token_budget.context_used_tokens // 0' 2>/dev/null || printf '0')"
   if (( aggregate_resource_tokens >= DAYFLOW_RESOURCE_TOKEN_LIMIT )); then
     DAYFLOW_EXECUTION_ERROR="uncached/output token limit reached before launch (${DAYFLOW_RESOURCE_TOKEN_LIMIT})"
     export DAYFLOW_EXECUTION_ERROR
     return 124
   fi
-  if (( aggregate_context_tokens >= DAYFLOW_CONTEXT_TOKEN_LIMIT )); then
-    DAYFLOW_EXECUTION_ERROR="total context token limit reached before launch (${DAYFLOW_CONTEXT_TOKEN_LIMIT})"
-    export DAYFLOW_EXECUTION_ERROR
-    return 124
-  fi
-
   : >"$log_file"
   started_at="$(date +%s)"
   last_progress="$started_at"
@@ -1131,12 +1163,15 @@ dayflow_execute_bounded() {
     invocation_resource_tokens="$(jq -r '.uncached_input_tokens + .output_tokens' <<<"$invocation_usage")"
     aggregate_resource_tokens="$(dayflow_state_value "$issue_key" '.token_budget.resource_used_tokens // 0' 2>/dev/null || printf '0')"
     aggregate_context_tokens="$(dayflow_state_value "$issue_key" '.token_budget.context_used_tokens // 0' 2>/dev/null || printf '0')"
+    if [[ "$context_observed_inflight" == "false" ]] && \
+       (( aggregate_context_tokens + invocation_context_tokens >= DAYFLOW_CONTEXT_TOKEN_LIMIT )); then
+      dayflow_record_context_observation "$issue_key" "$((aggregate_context_tokens + invocation_context_tokens))" "${mode} execution"
+      context_observed_inflight=true
+    fi
     if (( size >= DAYFLOW_LOG_LIMIT_BYTES )); then
       limit_reason="command output limit exceeded (${DAYFLOW_LOG_LIMIT_BYTES} bytes)"
     elif (( aggregate_resource_tokens + invocation_resource_tokens >= DAYFLOW_RESOURCE_TOKEN_LIMIT )); then
       limit_reason="uncached/output token limit exceeded (${DAYFLOW_RESOURCE_TOKEN_LIMIT})"
-    elif (( aggregate_context_tokens + invocation_context_tokens >= DAYFLOW_CONTEXT_TOKEN_LIMIT )); then
-      limit_reason="total context token limit exceeded (${DAYFLOW_CONTEXT_TOKEN_LIMIT})"
     elif (( now - last_progress >= DAYFLOW_STALL_LIMIT_SECONDS )); then
       limit_reason="no progress for ${DAYFLOW_STALL_LIMIT_SECONDS}s"
     elif (( elapsed >= DAYFLOW_EXECUTION_LIMIT_SECONDS )); then
@@ -1195,12 +1230,10 @@ dayflow_execute_bounded() {
 
   aggregate_resource_tokens="$(dayflow_state_value "$issue_key" '.token_budget.resource_used_tokens // 0' 2>/dev/null || printf '0')"
   aggregate_context_tokens="$(dayflow_state_value "$issue_key" '.token_budget.context_used_tokens // 0' 2>/dev/null || printf '0')"
+  dayflow_record_context_observation "$issue_key" "$aggregate_context_tokens" "after ${mode} completion"
   if [[ -z "$limit_reason" && "$rc" == "0" ]]; then
     if (( aggregate_resource_tokens >= DAYFLOW_RESOURCE_TOKEN_LIMIT )); then
       limit_reason="uncached/output token limit exceeded after process exit (${DAYFLOW_RESOURCE_TOKEN_LIMIT})"
-      rc=124
-    elif (( aggregate_context_tokens >= DAYFLOW_CONTEXT_TOKEN_LIMIT )); then
-      limit_reason="total context token limit exceeded after process exit (${DAYFLOW_CONTEXT_TOKEN_LIMIT})"
       rc=124
     fi
   fi

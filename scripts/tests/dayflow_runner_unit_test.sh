@@ -27,7 +27,8 @@ run_token_budget_focus() {
   local prompt="$TEST_TMP/focus-prompt"
   local output="$TEST_TMP/focus-output"
   local usage_log="$TEST_TMP/focus-usage.jsonl"
-  mkdir -p "$DAYFLOW_STATE_ROOT" "$DAYFLOW_LOG_ROOT"
+  local worktree="$TEST_TMP/focus-worktree"
+  mkdir -p "$DAYFLOW_STATE_ROOT" "$DAYFLOW_LOG_ROOT" "$worktree"
   printf '%s\n' 'test' >"$prompt"
   cat >"$usage_log" <<'EOF'
 {"usage":{"input_tokens":100,"cached_input_tokens":90,"output_tokens":10}}
@@ -40,14 +41,14 @@ EOF
   export FAKE_CODEX_MODE=late-usage
   DAYFLOW_RESOURCE_TOKEN_LIMIT=1000
   DAYFLOW_CONTEXT_TOKEN_LIMIT=1000
-  assert_success 'focus late usage execution' dayflow_execute_bounded CEN-35 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/focus-late.jsonl" "$output"
+  assert_success 'focus late usage execution' dayflow_execute_bounded CEN-35 primary-new "$worktree" fake-model medium '' "$prompt" "$TEST_TMP/focus-late.jsonl" "$output"
   assert_eq '70' "$(jq -r '.token_budget.resource_used_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'focus resource usage persisted'
   assert_eq '220' "$(jq -r '.token_budget.context_used_tokens' "$DAYFLOW_STATE_ROOT/CEN-35.json")" 'focus context usage persisted'
 
   printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-38.json"
   export FAKE_CODEX_MODE=success
-  assert_success 'focus first incremental invocation' dayflow_execute_bounded CEN-38 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/focus-incremental-1.jsonl" "$output"
-  assert_success 'focus second incremental invocation' dayflow_execute_bounded CEN-38 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/focus-incremental-2.jsonl" "$output"
+  assert_success 'focus first incremental invocation' dayflow_execute_bounded CEN-38 primary-new "$worktree" fake-model medium '' "$prompt" "$TEST_TMP/focus-incremental-1.jsonl" "$output"
+  assert_success 'focus second incremental invocation' dayflow_execute_bounded CEN-38 primary-new "$worktree" fake-model medium '' "$prompt" "$TEST_TMP/focus-incremental-2.jsonl" "$output"
   assert_eq '2' "$(jq -r '.usage.invocations' "$DAYFLOW_STATE_ROOT/CEN-38.json")" 'focus invocations accumulated once each'
   assert_eq '150' "$(jq -r '.usage.total_tokens' "$DAYFLOW_STATE_ROOT/CEN-38.json")" 'focus incremental totals accumulated'
 
@@ -55,7 +56,7 @@ EOF
   export FAKE_CODEX_MODE=token-limit
   DAYFLOW_RESOURCE_TOKEN_LIMIT=10
   DAYFLOW_CONTEXT_TOKEN_LIMIT=1000
-  if dayflow_execute_bounded CEN-29 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/focus-resource.jsonl" "$output"; then
+  if dayflow_execute_bounded CEN-29 primary-new "$worktree" fake-model medium '' "$prompt" "$TEST_TMP/focus-resource.jsonl" "$output"; then
     test_fail 'focus resource guard should fail'
   fi
   assert_eq 'uncached/output token limit exceeded (10)' "$DAYFLOW_EXECUTION_ERROR" 'focus resource guard reason'
@@ -64,16 +65,26 @@ EOF
   export FAKE_CODEX_MODE=fast-overflow
   DAYFLOW_RESOURCE_TOKEN_LIMIT=1000
   DAYFLOW_CONTEXT_TOKEN_LIMIT=10
-  if dayflow_execute_bounded CEN-33 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/focus-context.jsonl" "$output"; then
-    test_fail 'focus context guard should fail'
-  fi
-  assert_eq 'total context token limit exceeded after process exit (10)' "$DAYFLOW_EXECUTION_ERROR" 'focus context guard reason'
+  assert_success 'focus late context observation remains successful' \
+    dayflow_execute_bounded CEN-33 primary-new "$worktree" fake-model medium '' "$prompt" "$TEST_TMP/focus-context.jsonl" "$output"
+  assert_eq '' "$DAYFLOW_EXECUTION_ERROR" 'focus context observation does not become execution error'
+  assert_eq 'over-threshold' "$(jq -r '.context_observation.status' "$DAYFLOW_STATE_ROOT/CEN-33.json")" 'focus context observation status'
+  assert_eq '10' "$(jq -r '.context_observation.context_threshold_tokens' "$DAYFLOW_STATE_ROOT/CEN-33.json")" 'focus context threshold persisted'
+
+  mkdir -p "$TEST_TMP/focus-resume-worktree"
+  printf '%s\n' '{"usage":{"input_tokens":20,"cached_input_tokens":20,"uncached_input_tokens":0,"output_tokens":0,"total_tokens":20,"invocations":1}}' \
+    >"$DAYFLOW_STATE_ROOT/CEN-39.json"
+  export FAKE_CODEX_MODE=success
+  assert_success 'focus context-over-threshold resume is observed before reuse' \
+    dayflow_execute_bounded CEN-39 primary-resume "$TEST_TMP/focus-resume-worktree" fake-model medium fake-session "$prompt" "$TEST_TMP/focus-resume.jsonl" "$output"
+  assert_eq 'before primary-resume launch' "$(jq -r '.context_observation.first_phase' "$DAYFLOW_STATE_ROOT/CEN-39.json")" 'focus resume admission observation phase'
+  assert_file_contains "$DAYFLOW_STATE_ROOT/CEN-39.json" 'resource limit remains authoritative' 'focus resume operator-facing context reason'
 
   printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-36.json"
   printf '%040d\n' 0 >"$TEST_TMP/focus-oversized-prompt"
   DAYFLOW_PROMPT_LIMIT_BYTES=16
   export FAKE_CODEX_MODE=success
-  if dayflow_execute_bounded CEN-36 primary-new "$ROOT_DIR" fake-model medium '' "$TEST_TMP/focus-oversized-prompt" "$TEST_TMP/focus-prompt-limit.jsonl" "$output"; then
+  if dayflow_execute_bounded CEN-36 primary-new "$worktree" fake-model medium '' "$TEST_TMP/focus-oversized-prompt" "$TEST_TMP/focus-prompt-limit.jsonl" "$output"; then
     test_fail 'focus prompt guard should fail'
   fi
   assert_eq 'prompt limit exceeded (41/16 bytes)' "$DAYFLOW_EXECUTION_ERROR" 'focus prompt guard reason'
@@ -84,7 +95,7 @@ EOF
   DAYFLOW_LOG_LIMIT_BYTES=512
   DAYFLOW_RESOURCE_TOKEN_LIMIT=1000
   DAYFLOW_CONTEXT_TOKEN_LIMIT=1000
-  if dayflow_execute_bounded CEN-37 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/focus-output-limit.jsonl" "$output"; then
+  if dayflow_execute_bounded CEN-37 primary-new "$worktree" fake-model medium '' "$prompt" "$TEST_TMP/focus-output-limit.jsonl" "$output"; then
     test_fail 'focus command output guard should fail'
   fi
   assert_eq 'command output limit exceeded (512 bytes)' "$DAYFLOW_EXECUTION_ERROR" 'focus command output guard reason'
@@ -94,7 +105,7 @@ EOF
   export FAKE_CODEX_MODE=stall
   DAYFLOW_STALL_LIMIT_SECONDS=1
   DAYFLOW_EXECUTION_LIMIT_SECONDS=10
-  if dayflow_execute_bounded CEN-30 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/focus-stall.jsonl" "$output"; then
+  if dayflow_execute_bounded CEN-30 primary-new "$worktree" fake-model medium '' "$prompt" "$TEST_TMP/focus-stall.jsonl" "$output"; then
     test_fail 'focus stall guard should fail'
   fi
   assert_eq 'no progress for 1s' "$DAYFLOW_EXECUTION_ERROR" 'focus stall guard reason'
@@ -103,7 +114,7 @@ EOF
   export FAKE_CODEX_MODE=execution-limit
   DAYFLOW_STALL_LIMIT_SECONDS=10
   DAYFLOW_EXECUTION_LIMIT_SECONDS=1
-  if dayflow_execute_bounded CEN-31 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/focus-execution.jsonl" "$output"; then
+  if dayflow_execute_bounded CEN-31 primary-new "$worktree" fake-model medium '' "$prompt" "$TEST_TMP/focus-execution.jsonl" "$output"; then
     test_fail 'focus execution guard should fail'
   fi
   assert_eq 'execution limit exceeded (1s)' "$DAYFLOW_EXECUTION_ERROR" 'focus execution guard reason'
@@ -365,10 +376,12 @@ unset FAKE_CODEX_INVOCATION_COUNT_FILE
 export FAKE_CODEX_MODE=fast-overflow
 DAYFLOW_RESOURCE_TOKEN_LIMIT=1000
 DAYFLOW_CONTEXT_TOKEN_LIMIT=10
-if dayflow_execute_bounded CEN-33 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/fast-overflow.jsonl" "$output"; then
-  test_fail 'successful fast exit at context cap should fail'
-fi
-assert_eq 'total context token limit exceeded after process exit (10)' "$DAYFLOW_EXECUTION_ERROR" 'post-wait context token boundary'
+assert_success 'successful fast exit at context threshold remains successful' \
+  dayflow_execute_bounded CEN-33 primary-new "$ROOT_DIR" fake-model medium '' "$prompt" "$TEST_TMP/fast-overflow.jsonl" "$output"
+assert_eq '' "$DAYFLOW_EXECUTION_ERROR" 'post-wait context observation is not an execution error'
+assert_eq 'over-threshold' "$(jq -r '.context_observation.status' "$DAYFLOW_STATE_ROOT/CEN-33.json")" 'post-wait context observation status'
+assert_eq '10' "$(jq -r '.context_observation.context_used_tokens' "$DAYFLOW_STATE_ROOT/CEN-33.json")" 'post-wait context usage observed'
+assert_eq '10' "$(jq -r '.context_observation.context_threshold_tokens' "$DAYFLOW_STATE_ROOT/CEN-33.json")" 'post-wait context threshold observed'
 
 printf '%s\n' '{"tokens_used":0}' >"$DAYFLOW_STATE_ROOT/CEN-35.json"
 export FAKE_CODEX_MODE=late-usage

@@ -66,6 +66,10 @@ case "${FAKE_CODEX_MODE:-success}" in
     printf '%s\n' '{"type":"error","message":"model unavailable: access denied"}'
     exit 1
     ;;
+  codex-failure)
+    printf '%s\n' '{"type":"error","message":"fake Codex failure"}'
+    exit 42
+    ;;
   token-limit)
     printf '%s\n' '{"type":"thread.started","thread_id":"fake-token-session"}'
     printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":100}}'
@@ -84,6 +88,9 @@ case "${FAKE_CODEX_MODE:-success}" in
   fast-overflow)
     printf '%s\n' '{"type":"response.completed","response":{"usage":{"total_tokens":10}}}'
     exit 0
+    ;;
+  late-context-success)
+    printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":200,"cached_input_tokens":190,"output_tokens":5,"total_tokens":205}}'
     ;;
   late-usage)
     printf '%s\n' '{"type":"thread.started","thread_id":"fake-late-session"}'
