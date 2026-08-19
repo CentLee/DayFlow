@@ -34,5 +34,3 @@ jobs:
           command -v rg
       - name: Audit harness drift and shell syntax
         run: scripts/audit_harness_drift.sh
-      - name: Run local runner tests
-        run: scripts/tests/run_dayflow_runner_tests.sh

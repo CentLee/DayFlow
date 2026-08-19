@@ -12,33 +12,13 @@ Use this skill when coordinating multi-step DayFlow work or maintaining the DayF
 The harness is an evolving engineering system, not a fixed bootstrap artifact.
 Before adding agents, skills, or workflow rules, audit the current system and identify drift.
 
-## Phase 0: Harness Audit
+## Direct PR Flow
 
-Start here for any harness engineering, maintenance, or suspicious workflow behavior.
-
-Read and compare:
-
-- `docs/automation-model.md`
-- `docs/local-runner.md`
-- `docs/harness-engineering.md`
-- `.codex/agents/`
-- `.codex/skills/`
-- relevant `scripts/`
-
-Classify the request:
-
-- new capability
-- existing capability expansion
-- maintenance / drift correction
-
-Check for drift across:
-
-- docs vs local runner behavior
-- local runner behavior vs tests and CI
-- agent role definitions vs issue template expectations
-- skill instructions vs actual repository paths
-
-If drift exists, fix alignment before expanding scope.
+Start with the task goal, allowed files, named contract excerpts, and required
+tests. Route one focused issue to one agent, create one branch and PR, and use
+CI plus a bounded PR review as the gates. Do not invoke the archived local
+runner, supervisor, token manager, automatic queue pickup, or model retry
+loop.
 
 ## Phase 1: Scope and Architecture Choice
 
@@ -59,9 +39,9 @@ Use architecture-pattern reasoning only as support:
 
 Do not introduce parallel multi-agent fan-out inside one issue unless the user-facing outcome is small, stable, and the handoff remains sequential in practice.
 
-## Phase 2: Execution Gate
+## Execution Gate
 
-Treat an issue as auto-runnable only if:
+Treat an issue as ready for direct implementation only if:
 
 - `Primary Agent` is present
 - `Inputs` are present
@@ -69,7 +49,7 @@ Treat an issue as auto-runnable only if:
 - `Out of Scope` is present
 - the work fits in one PR
 
-If any of those are missing, block or clarify instead of expanding scope during implementation.
+If any are missing, clarify or update the task before implementation.
 
 ## Phase 3: Model Posture
 
