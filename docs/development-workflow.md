@@ -29,5 +29,6 @@ results, and only relevant contract sections.
 
 ## Archived Automation
 
-The former local runner and supervisor remain in Git history while preserved
-workspaces are retired. They are not an approved execution path for new work.
+The former local runner and supervisor were retired after their preserved
+workspaces were assessed. Their implementation remains in Git history and is
+not an approved execution path for new work.

@@ -1,5 +1,0 @@
-#!/bin/bash
-set -euo pipefail
-
-printf '%s\n' "$*" >>"${FAKE_LAUNCHCTL_LOG:?}"
-exit 0
