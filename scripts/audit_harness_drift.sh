@@ -19,7 +19,8 @@ for path in "${required_files[@]}"; do
   }
 done
 
-bash -n scripts/audit_harness_drift.sh scripts/github_merge_reconcile.sh
+bash -n scripts/audit_harness_drift.sh scripts/github_merge_reconcile.sh scripts/github_merge_ready_notify.sh \
+  scripts/tests/github_merge_ready_notify_test.sh scripts/tests/fakes/github_merge_ready_curl
 
 if [[ -e .gitmodules || -e vendor/symphony ]]; then
   printf 'removed runtime dependency is still present\n' >&2

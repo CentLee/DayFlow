@@ -1,0 +1,17 @@
+{
+  "action": "completed",
+  "repository": {
+    "full_name": "CentLee/DayFlow"
+  },
+  "workflow_run": {
+    "event": "pull_request",
+    "status": "completed",
+    "conclusion": "success",
+    "head_sha": "0123456789abcdef0123456789abcdef01234567",
+    "pull_requests": [
+      {
+        "number": 46
+      }
+    ]
+  }
+}

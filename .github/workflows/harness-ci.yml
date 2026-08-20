@@ -34,3 +34,5 @@ jobs:
           command -v rg
       - name: Audit harness drift and shell syntax
         run: scripts/audit_harness_drift.sh
+      - name: Test merge-ready notification gate
+        run: scripts/tests/github_merge_ready_notify_test.sh
