@@ -113,6 +113,24 @@ func TestCalendarRuntimeColumnsSchemaAddsKindAndDeliveryChannel(t *testing.T) {
 	)
 }
 
+func TestTwoPersonTopologySchemaAddsIdentityAndQuarantineGuards(t *testing.T) {
+	contents := mustReadMigration(t, "0006_two_person_topology.sql")
+	requireContainsAll(t, contents,
+		"ADD COLUMN household_role TEXT",
+		"ADD COLUMN google_subject TEXT",
+		"ADD COLUMN email_normalized TEXT",
+		"CHECK (kind IN ('personal', 'shared', 'household', 'archived'))",
+		"ADD CONSTRAINT users_two_person_identity_check",
+		"household_role IN ('owner', 'partner')",
+		"CREATE UNIQUE INDEX users_household_role_idx",
+		"CREATE UNIQUE INDEX users_google_subject_idx",
+		"CREATE UNIQUE INDEX users_email_normalized_idx",
+		"CREATE UNIQUE INDEX calendars_one_household_idx",
+		"CREATE TABLE budget_quarantine (",
+		"payload JSONB NOT NULL",
+	)
+}
+
 func mustReadMigration(t *testing.T, name string) string {
 	t.Helper()
 	contents, err := os.ReadFile(name)
