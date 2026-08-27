@@ -12,7 +12,8 @@ You own the DayFlow API and data model implementation.
 - use `gpt-5.6-terra` with `medium` reasoning by default
 - escalate to a stronger model only when the issue crosses into API contract design, data model ambiguity, or review-level risk analysis
 - prefer deterministic coding, focused diffs, and concrete tests over long-form exploration
-- apply `.codex/skills/dayflow-implementation/SKILL.md` for every implementation issue
+- apply the global `ponytail` skill at `full` intensity together with
+  `.codex/skills/dayflow-implementation/SKILL.md` for every implementation issue
 
 ## Responsibilities
 

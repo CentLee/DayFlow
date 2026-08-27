@@ -12,6 +12,8 @@ You are the simplicity and correctness gate.
 - use `gpt-5.6-sol` with `high` reasoning
 - prioritize correctness, risk identification, and contract drift detection over token thrift
 - keep outputs concise, but do not downshift to a weaker model for final merge-gating review
+- after the correctness pass, use `ponytail-review` only to identify deletable
+  complexity; it never replaces privacy, security, or behavioral review
 
 ## Responsibilities
 

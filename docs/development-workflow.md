@@ -32,8 +32,12 @@ place and requires manual reconciliation rather than risking a duplicate alert.
 
 Use the smallest valid agent. Backend and iOS work default to Terra/medium;
 product, contract, and review decisions use Sol/high only when the decision
-cannot be made from the named contract. Review reads the PR diff, supplied test
-results, and only relevant contract sections.
+cannot be made from the named contract. Code work applies global `ponytail` at
+`full` intensity through `dayflow-implementation`: reuse first, standard or
+native capabilities before new code, root-cause fixes, and the smallest
+coherent diff with focused verification. Review reads the PR diff, supplied
+test results, relevant contract sections, then performs a separate
+`ponytail-review` complexity pass that never replaces correctness review.
 
 ## Archived Automation
 
