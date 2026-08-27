@@ -119,12 +119,12 @@ Dependencies:
 
 ### DQ-02 — [Integration] add private iMac and Tailscale deployment
 
-Linear ID: assigned at creation
+Linear ID: CEN-49 (Todo)
 
 Goal:
-- Make the delivered two-person topology operable on the owner's iMac through
-  a recoverable Tailscale MagicDNS path while retaining any legacy ingress only
-  as a time-bounded rollback path until the iOS cutover gate.
+- Make the delivered two-person topology operable on the owner's M1 iMac
+  through a recoverable, private Tailscale MagicDNS path. This issue is run on
+  that iMac in a new Codex session after the execution preflight below passes.
 
 Primary Agent:
 - `integration-agent`
@@ -134,23 +134,42 @@ Inputs:
 - `docs/product-spec.md`
 - `docs/api-contract.md`
 - `docs/development-workflow.md`
+- `services/api/Dockerfile`
+- `infra/docker/docker-compose.system.yml`
+
+Execution Preflight:
+- Use the owner's actual M1 iMac with Docker Desktop working; record
+  `docker version` and `docker compose version` in deployment evidence.
+- Install Tailscale on the iMac and both supported iPhones, then join them to
+  the same private tailnet. Enable MagicDNS and accept the Tailscale HTTPS
+  certificate-transparency notice before configuring the app's HTTPS endpoint.
+- Use `gh auth status` and a locally configured `LINEAR_API_KEY`; keep `.env`
+  and Google configuration local. Do not copy a Discord webhook to the iMac.
+- Start from the latest `origin/develop` in a new Codex session and execute
+  CEN-49. Do not use a machine share, Funnel, custom domain, public DNS, router
+  forwarding, or a public tunnel for this MVP.
 
 Done When:
-- the API and PostgreSQL have an iMac deployment configuration with durable
-  storage, deterministic restart behavior, and secrets outside version control
-- an allowlisted iPhone reaches the API at the configured HTTPS Tailscale
-  MagicDNS base URL while PostgreSQL remains reachable only by the API
-- the private path requires no new public DNS, router forwarding, Funnel,
-  public reverse proxy, or internet-facing listener
+- a dedicated deployment Compose configuration runs the API and PostgreSQL
+  with a named durable PostgreSQL volume and deterministic restart behavior;
+  secrets remain outside version control
+- PostgreSQL has no published host port, and the API binds only to loopback.
+  The host-level `tailscale serve` HTTPS proxy forwards to that loopback API;
+  no Tailscale sidecar, Nginx, HAProxy, custom domain, Funnel, public DNS,
+  router forwarding, or public listener is introduced
+- `services/api/Dockerfile` builds a native `linux/arm64` image on the M1 iMac,
+  or an explicitly tested multi-architecture image. The current hard-coded
+  `GOARCH=amd64` build must not rely on transparent emulation
+- each supported iPhone reaches the API at the configured HTTPS Tailscale
+  MagicDNS base URL, while PostgreSQL remains reachable only by the API
 - backup, restore, restart, health, and private-connectivity checks are
-  repeatable and recorded in the operator runbook
-- any existing legacy public ingress is documented as rollback-only and is not
-  removed by this brief
+  repeatable and recorded in the operator runbook. Evidence includes
+  `tailscale serve status`, API health, and a database restore on the iMac
 
 Out of Scope:
 - Google ID-token exchange or iOS authentication
-- removal of legacy ingress or rollback data
 - Google Calendar synchronization or hosted-only infrastructure
+- public ingress, reverse proxies, custom domains, and hosted deployment
 
 One PR Scope:
 - Add and verify the private iMac deployment path and its operator evidence.
@@ -165,6 +184,7 @@ Write Scope:
 - `deploy/**`
 - `scripts/tests/deployment/**`
 - `docs/operator-runbook.md`
+- `services/api/Dockerfile`
 
 Dependencies:
 - DQ-01
@@ -674,8 +694,7 @@ Dependencies:
 
 ## Immediate Linear Task-Creation Handoff
 
-DQ-01 was delivered as CEN-45. The next eligible brief is DQ-02,
-`[Integration] add private iMac and Tailscale deployment`. Create it only when
-the owner's iMac is available for the required private-connectivity and
-recovery checks. Let Linear assign its new identifier; do not reuse CEN-24
-through CEN-27 or predict the identifier.
+DQ-01 was delivered as CEN-45. DQ-02 is CEN-49,
+`[Integration] add private iMac and Tailscale deployment`, and remains Todo.
+Start it only on the owner's iMac after its private-connectivity and recovery
+preflight passes. Do not reuse CEN-24 through CEN-27.
