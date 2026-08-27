@@ -17,8 +17,16 @@ is resolved before implementation, not through an orchestration retry loop.
 - GitHub Actions runs repository tests and checks.
 - Pull requests record the changed behavior, tests, and residual risks.
 - A human decides scope changes and merge readiness.
+- When every applicable API or harness CI run succeeds for an open, repository-
+  owned task PR targeting `develop`, GitHub Actions sends one `merge-ready`
+  Discord notification for that head SHA. It uses a durable PR comment marker
+  to prevent duplicate delivery and never checks out PR code in that workflow.
 - The merged-PR workflow may update the matching Linear issue and notify
   Discord; it never launches or resumes a model.
+
+If Discord rejects a merge-ready delivery, the workflow leaves a retryable PR
+comment marker and fails. An ambiguous transport failure leaves its claim in
+place and requires manual reconciliation rather than risking a duplicate alert.
 
 ## Agent Use
 
