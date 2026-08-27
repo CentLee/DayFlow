@@ -2,7 +2,7 @@
 
 This queue corrects the reviewed CEN-43 proposal. It separates completed
 Linear history from future delivery and makes every future brief directly
-copyable into a runner-admissible Linear issue.
+copyable into a direct-PR Linear issue.
 
 The product baseline remains fixed: one owner, one partner, two allowlisted
 Google identities, one personal calendar each, one household calendar,
@@ -21,25 +21,27 @@ reopened:
 
 | Linear issue | Completed scope |
 | --- | --- |
-| CEN-34 | Aligned the local runner with the Terra policy and established the cutover execution base. |
+| CEN-34 | Aligned the former local runner with the Terra policy before its retirement. |
 | CEN-35 | Completed and reviewed the fixed two-person topology on its stacked topology branch. |
-| CEN-36 | Corrected cached-context accounting in the runner. |
+| CEN-36 | Corrected cached-context accounting in the former local runner. |
 | CEN-37 | Prevented finalized lifecycle records from being dispatched again. |
 | CEN-38 | Excluded auxiliary state artifacts from issue execution. |
-| CEN-39 | Hardened runner publication admission. |
-| CEN-40 | Bounded runner token budgets. |
+| CEN-39 | Hardened former runner publication admission. |
+| CEN-40 | Bounded former runner token budgets. |
 | CEN-41 | Preserved stacked completed worktrees. |
 | CEN-42 | Made context-budget observations non-blocking. |
 | CEN-43 | Proposed the delivery-queue rebase reviewed and corrected by CEN-44. |
 | CEN-44 | Corrects the reviewed delivery queue represented by this document. |
+| CEN-45 | Delivered DQ-01's reviewed two-person topology delta to `develop`. |
+| CEN-46 | Added GitHub Actions merge-ready Discord notification delivery. |
+| CEN-47 | Applied the Ponytail implementation posture to active agents and skills. |
 
 The CEN-35 topology commit `7337c1d576a4b370cc1b43baf0444daef1d9ecd9`
 is on `origin/integration/private-two-person-cutover`; it is not an ancestor of
-`origin/develop`. A Done Linear state therefore does not make its code a valid
-prerequisite for a runner branch based on `origin/develop`. DQ-01 is the
-required delivery bridge and deliberately depends only on CEN-44.
+`origin/develop`. CEN-45 delivered the required DQ-01 bridge without assuming
+that source branch was an ancestor of its direct-PR branch.
 
-The prior CEN-24 through CEN-27 plan remains superseded or cancelled. Its
+The prior CEN-24 through CEN-27 plan is canceled. Its
 private deployment, authentication, calendar, budget, offline, and cutover
 intent is represented only by the future briefs below. Its public onboarding,
 generic invitation, and arbitrary sharing intent remains cancelled.
@@ -64,10 +66,10 @@ each brief:
 
 ### DQ-01 — [Integration] deliver reviewed two-person topology to develop
 
-Linear ID: assigned at creation
+Linear ID: CEN-45 (Done)
 
 Goal:
-- Reconcile the reviewed CEN-35 topology delta onto the runner's
+- Reconcile the reviewed CEN-35 topology delta onto the direct-PR
   `origin/develop` delivery base without importing unrelated stacked history.
 
 Primary Agent:
@@ -83,7 +85,7 @@ Inputs:
 Done When:
 - the application, migration, and system-Compose topology delta from the named
   commit is reconciled onto a branch created from `origin/develop`, without
-  importing unrelated runner or documentation commits from the stacked branch
+  importing unrelated legacy-runner or documentation commits from the stacked branch
 - deployment configuration requires exactly one owner and one partner Google
   subject with normalized-email guards
 - migration preserves the mapped user IDs and personal calendars, provisions
@@ -131,7 +133,7 @@ Inputs:
 - DQ-01 delivered topology
 - `docs/product-spec.md`
 - `docs/api-contract.md`
-- `docs/local-runner.md`
+- `docs/development-workflow.md`
 
 Done When:
 - the API and PostgreSQL have an iMac deployment configuration with durable
@@ -672,9 +674,8 @@ Dependencies:
 
 ## Immediate Linear Task-Creation Handoff
 
-After CEN-44 merges and is Done, create DQ-01 with title
-`[Integration] deliver reviewed two-person topology to develop`. Let Linear
-assign a new identifier, set only CEN-44 as its completed blocker, and copy the
-brief exactly. Its runner branch must start at `origin/develop`; the named
-CEN-35 commit is a reviewed source delta, not an assumed ancestor or completed
-code prerequisite.
+DQ-01 was delivered as CEN-45. The next eligible brief is DQ-02,
+`[Integration] add private iMac and Tailscale deployment`. Create it only when
+the owner's iMac is available for the required private-connectivity and
+recovery checks. Let Linear assign its new identifier; do not reuse CEN-24
+through CEN-27 or predict the identifier.
