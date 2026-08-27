@@ -41,6 +41,13 @@ fi
 rg -q 'direct PR workflow' AGENTS.md .codex/skills/dayflow-orchestrator/SKILL.md docs/development-workflow.md
 rg -q 'gpt-5\.6-sol' .codex/agents/product-agent.md .codex/agents/integration-agent.md .codex/agents/review-agent.md
 rg -q 'gpt-5\.6-terra' .codex/agents/backend-agent.md .codex/agents/ios-agent.md
+rg -q 'ponytail.*full' AGENTS.md .codex/skills/dayflow-implementation/SKILL.md \
+  .codex/agents/backend-agent.md .codex/agents/ios-agent.md .codex/agents/integration-agent.md
+rg -q 'ponytail-review' .codex/agents/review-agent.md .codex/skills/dayflow-orchestrator/SKILL.md
+if rg -n 'scripts/dayflow_(runner|supervisor)\.sh' .codex/skills; then
+  printf 'archived local runner instruction remains in an active skill\n' >&2
+  exit 1
+fi
 rg -q '^\.dayflow/$' .gitignore
 rg -q '^\.symphony/$' .gitignore
 

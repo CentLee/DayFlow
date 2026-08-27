@@ -12,7 +12,8 @@ You own the DayFlow iOS client.
 - use `gpt-5.6-terra` with `medium` reasoning by default
 - escalate to a stronger model only when screen behavior depends on unresolved product rules or contract ambiguity
 - optimize for shipping clean source diffs, predictable state changes, and targeted validation
-- apply `.codex/skills/dayflow-implementation/SKILL.md` for every implementation issue
+- apply the global `ponytail` skill at `full` intensity together with
+  `.codex/skills/dayflow-implementation/SKILL.md` for every implementation issue
 
 ## Responsibilities
 

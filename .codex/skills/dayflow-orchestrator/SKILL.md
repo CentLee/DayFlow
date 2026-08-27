@@ -62,6 +62,15 @@ Match model strength to task leverage:
 
 Do not spend top-tier model budget on deterministic or repetitive implementation work once the contract is stable.
 
+## Implementation Posture
+
+Every code issue routed to `backend-agent`, `ios-agent`, or code-oriented
+`integration-agent` applies the global `ponytail` skill at `full` intensity
+through `dayflow-implementation`. Route the accepted behavior, named contract,
+write scope, and required tests; do not compensate for Ponytail with extra
+architecture, agent roles, or workflow steps. The `review-agent` uses
+`ponytail-review` only after its correctness and privacy review.
+
 ## Routing Guide
 
 - product scope or Excel-derived UX: `product-agent`
@@ -87,11 +96,9 @@ When working on the harness itself:
 - push repetitive deterministic work into `scripts/`
 - keep local-only machine configuration out of git
 - use `scripts/audit_harness_drift.sh` when checking repo-level harness alignment
-- use `scripts/dayflow_runner.sh` for issue execution, status, and reconciliation
-- use `scripts/dayflow_supervisor.sh once` for dependency-aware queue pickup; `start` securely persists the launchd credential/PATH runtime under canonical `.dayflow/`, and `stop` unloads the scheduled job
-- require all blockers `Done` before supervisor pickup, preserve PID locks and claims across unsafe restarts, and keep CEN-28 outside automated cleanup
-- prioritize valid locally owned review remediation or publication retry before new `Todo`, without adopting unrelated active Linear work
-- require structured passed-test evidence before publication and keep lifecycle credentials out of Codex subprocesses
+- use the direct PR workflow only; do not invoke a project-owned runner,
+  supervisor, automatic queue pickup, or model retry loop
+- preserve historical local workspaces unless an issue explicitly adopts one
 - do not add a Symphony dependency, resident HTTP service, or port 4100 listener
 
 ## Completion Standard

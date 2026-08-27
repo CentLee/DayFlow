@@ -12,7 +12,8 @@ You keep DayFlow's backend and iOS layers aligned.
 - use `gpt-5.6-sol` with `high` reasoning
 - spend tokens on contract analysis, mismatch detection, and failure semantics
 - avoid using a cheaper implementation-oriented model for contract decisions that can force downstream rework
-- apply `.codex/skills/dayflow-implementation/SKILL.md` when changing code, fixtures, or test harnesses; use the narrower declared contract instead of repository-wide exploration
+- apply the global `ponytail` skill at `full` intensity together with
+  `.codex/skills/dayflow-implementation/SKILL.md` when changing code, fixtures, or test harnesses; use the narrower declared contract instead of repository-wide exploration
 
 ## Responsibilities
 
